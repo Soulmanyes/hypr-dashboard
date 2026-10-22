@@ -292,6 +292,10 @@ class Dashboard(Adw.ApplicationWindow):
 		self.mark_changed()
 		if hasattr(self, "searchables"):
 			self.refilter()
+		# Search everything shows its own option rows; rebuild them from the values just
+		# read, or a switch there keeps the old one and toggling it compares against that.
+		if self.global_search.get_text().strip():
+			self.on_global_search(self.global_search)
 
 	def build_gaming(self, page):
 		apps = self.state["gaming_apps"]
