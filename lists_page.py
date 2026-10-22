@@ -18,6 +18,15 @@ RESET = lists.RESET
 MATCH_KEYS = ["class", "title", "initial_class", "initial_title", "tag", "xwayland", "float", "fullscreen",
 	"pin", "focus", "group", "modal", "workspace", "content", "xdg_tag"]
 DIRECTIONS = ["horizontal", "vertical", "left", "right", "up", "down", "swipe", "pinch", "pinchin", "pinchout"]
+GESTURE_ACTIONS = ["workspace", "move", "resize", "special", "close", "fullscreen", "float", "dispatcher", "cursorZoom"]
+SLIDE = ["slide", "slide top", "slide bottom", "slide left", "slide right"]
+# Styles Hyprland accepts per animation family; a number after popin/slidefade is a percentage.
+ANIMATION_STYLES = {
+	"windows": SLIDE + ["popin", "popin 80%", "gnomed"],
+	"layers": SLIDE + ["popin", "popin 80%", "fade"],
+	"workspaces": ["slide", "slidevert", "fade", "slidefade", "slidefade 20%", "slidefadevert", "slidefadevert 20%"],
+	"borderangle": ["once", "loop"],
+}
 SECTION = re.compile(r"^-{3,}\s*([^-].*?)\s*-{3,}\s*$")
 NOTE = re.compile(r"^--\s+(\S.*)$")
 
@@ -53,6 +62,39 @@ def parse_value(text, type_hint=""):
 			except ValueError:
 				pass
 	return text
+
+
+def animation_styles(leaf):
+	"""The style choices for an animation leaf, or [] when it takes no style."""
+	if leaf.startswith("specialWorkspace"):
+		return ANIMATION_STYLES["workspaces"]
+	for family, styles in ANIMATION_STYLES.items():
+		if leaf.startswith(family):
+			return styles
+	return []
+
+
+def choice_entry(text, choices, on_change, placeholder=""):
+	"""An entry with a menu of known values; typing anything else still works."""
+	entry = Gtk.Entry(text=text, placeholder_text=placeholder, valign=Gtk.Align.CENTER, width_chars=16)
+	entry.connect("changed", lambda e: on_change(e.get_text()))
+	listbox = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["menu"])
+	popover = Gtk.Popover(child=Gtk.ScrolledWindow(child=listbox, propagate_natural_height=True,
+		max_content_height=320, hscrollbar_policy=Gtk.PolicyType.NEVER))
+	for choice in choices:
+		listbox.append(Gtk.Label(label=choice, xalign=0, margin_start=6, margin_end=6, margin_top=4, margin_bottom=4))
+
+	def pick(_box, row):
+		entry.set_text(choices[row.get_index()])
+		popover.popdown()
+	listbox.connect("row-activated", pick)
+	menu = Gtk.MenuButton(icon_name="pan-down-symbolic", popover=popover, valign=Gtk.Align.CENTER,
+		tooltip_text="Pick a value")
+	box = Gtk.Box(css_classes=["linked"], valign=Gtk.Align.CENTER)
+	box.append(entry)
+	box.append(menu)
+	box.entry = entry
+	return box
 
 
 def decimals(value):
@@ -142,6 +184,23 @@ class ListsPages:
 		else:
 			return None
 		return w
+
+	def style_widget(self, call, current, styles):
+		"""Animation style: pick from the menu or type one; clearing a style that wasn't set drops the edit."""
+		pending = self.pending.pending_field(call, (0, "style"))
+		text = pending if isinstance(pending, str) else current or ""
+
+		def on(value):
+			value = value.strip()
+			if not value:
+				if current is None:
+					self.pending.drop(("field", self.pending.call_key(call), (0, "style")))
+				else:
+					self.pending.field(call, (0, "style"), RESET)  # an empty style is an error; drop the field
+			else:
+				self.pending.field(call, (0, "style"), value)
+			self.changed()
+		return choice_entry(text, styles, on, placeholder="default")
 
 	def field_rows(self, parent, call, path, types=None, skip=(), title_prefix=""):
 		"""Rows for every field of the table at path, each with an editor and Remove."""
@@ -461,10 +520,18 @@ class ListsPages:
 			if call.nested:
 				anims.add(row)
 				continue
+			styles = animation_styles(name)
 			for key in ("enabled", "speed", "style"):
 				if key in fields and fields[key].kind == "literal":
 					r = Adw.ActionRow(title=key, subtitle={"speed": "in tenths of a second (ds)"}.get(key, ""))
-					r.add_suffix(self.value_widget(call, (0, key), fields[key], "number" if key == "speed" else ""))
+					if key == "style" and styles and isinstance(fields[key].value, str):
+						r.add_suffix(self.style_widget(call, fields[key].value, styles))
+					else:
+						r.add_suffix(self.value_widget(call, (0, key), fields[key], "number" if key == "speed" else ""))
+					row.add_row(r)
+				elif key == "style" and key not in fields and styles:
+					r = Adw.ActionRow(title=key, subtitle="not set: Hyprland's default for this animation")
+					r.add_suffix(self.style_widget(call, None, styles))
 					row.add_row(r)
 			if curve.kind == "literal" and names:
 				options = names if curve.value in names else names + [curve.value]
@@ -534,7 +601,8 @@ class ListsPages:
 		fingers = Gtk.SpinButton(adjustment=Gtk.Adjustment(lower=2, upper=5, step_increment=1, value=4),
 			valign=Gtk.Align.CENTER)
 		direction = Gtk.DropDown(model=Gtk.StringList.new(DIRECTIONS), valign=Gtk.Align.CENTER)
-		action = Gtk.Entry(placeholder_text="action, e.g. workspace", valign=Gtk.Align.CENTER, width_chars=16)
+		action_box = choice_entry("", GESTURE_ACTIONS, lambda _t: None, placeholder="action, e.g. workspace")
+		action = action_box.entry
 
 		def add_gesture():
 			a = action.get_text().strip()
@@ -545,7 +613,7 @@ class ListsPages:
 			self.pending.add("gesture", f"hl.gesture({{ fingers = {n}, direction = {items.to_lua(d)}, action = {items.to_lua(a)} }})",
 				f"{n} {d} fingers → {a}")
 			self.changed(True)
-		for w in (fingers, direction, action):
+		for w in (fingers, direction, action_box):
 			row.add_suffix(w)
 		row.add_suffix(button("Add", add_gesture))
 		gestures.add(row)
