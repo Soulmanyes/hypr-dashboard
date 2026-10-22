@@ -11,8 +11,10 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
+import apps  # noqa: E402
 import items  # noqa: E402
 import luasrc  # noqa: E402
+from lists_page import choice_entry  # noqa: E402
 
 NOT_SET = "not set"
 
@@ -325,6 +327,12 @@ class ItemsPages:
 			spin.connect("value-changed", lambda s: (self.pending.variable(var,
 				int(s.get_value()) if isinstance(value, int) else s.get_value()), self.changed()))
 			row.add_suffix(spin)
+		elif not var.is_colour() and (offer := apps.alternatives(value)):
+			# The value is an installed app of one kind (a terminal, a browser): offer the others.
+			kind, commands = offer
+			box = choice_entry(shown, commands, lambda text: (self.pending.variable(var, text), self.changed()))
+			box.get_last_child().set_tooltip_text(f"Installed {kind}")
+			row.add_suffix(box)
 		else:
 			entry = Gtk.Entry(text=shown, valign=Gtk.Align.CENTER, width_chars=22)
 			if var.is_colour():

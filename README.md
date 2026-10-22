@@ -53,6 +53,10 @@ after moving it). Start it from inside a Hyprland session.
   method, the master and scrolling layout settings, `cm_sdr_eotf`) are menus
   too, and the monitor options list your connected monitors. "(not set)"
   removes the setting.
+- A variable holding an installed app (`TERMINAL = "kitty"`) gets a menu of
+  the other installed apps of the same kind, from their `.desktop` files
+  (terminals, browsers, file managers, text editors, calculators, mail apps).
+  Apps that only run inside a terminal (vim) aren't offered.
 - Nested options are titled with their group ("groupbar height", "blur
   passes"), with Hyprland's description underneath.
 - Apply and Refresh keep each page scrolled where it was.
