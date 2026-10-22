@@ -39,6 +39,18 @@ git clone https://github.com/Soulmanyes/hypr-dashboard ~/hypr-dashboard
 The app runs from that folder, so keep it there (or run `install.sh` again
 after moving it). Start it from inside a Hyprland session.
 
+## While you edit
+
+- Every row of an option shows the same value, also in Search everything.
+  A typed number counts right away, without pressing Enter.
+- A badge on each changed option says what Apply will do: "changed, not
+  applied", "can't apply: <reason>", or "reset to default on Apply" ("reset to
+  <file:line> on Apply" when one of your files also sets it). After Reset, the
+  row shows the value it will get.
+- Animation styles and gesture actions have a menu of the values Hyprland
+  accepts; you can still type your own (`popin 70%`).
+- Apply and Refresh keep each page scrolled where it was.
+
 ## Before you start: backups and getting back
 
 - **On first launch**, and on the first launch after you update the app, it
