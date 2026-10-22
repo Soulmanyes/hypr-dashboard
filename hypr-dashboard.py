@@ -266,6 +266,7 @@ class Dashboard(Adw.ApplicationWindow):
 
 	def on_refresh(self, _button):
 		"""Re-reads open windows, option values and the other tabs; unapplied edits are kept."""
+		scrolled = self.scroll_positions()
 		self.refresh_hyprland()
 		self.load_options(keep_changes=True)
 		if self.items.pending or self.lists.pending:
@@ -274,6 +275,7 @@ class Dashboard(Adw.ApplicationWindow):
 		else:
 			self.load_items()
 		self.rebuild()
+		self.restore_scroll(scrolled)
 
 	def mark_changed(self):
 		pending = json.dumps(self.state) != self.saved or bool(self.options_page.changes) or bool(self.items.pending) \
@@ -551,12 +553,42 @@ class Dashboard(Adw.ApplicationWindow):
 			self.toasts.add_toast(Adw.Toast(title="Applied."))
 
 	def after_apply(self):
+		scrolled = self.scroll_positions()
 		self.state = rules.load_state()
 		self.saved = json.dumps(self.state)
 		self.refresh_hyprland()
 		self.load_options()
 		self.load_items()
 		self.rebuild()
+		self.restore_scroll(scrolled)
+
+	def scroll_positions(self):
+		"""(scroller, value) for every scrolled view in the window, so a reload can keep the view."""
+		found = []
+		stack = [self.get_first_child()]
+		while stack:
+			widget = stack.pop()
+			if widget is None:
+				continue
+			stack.append(widget.get_next_sibling())
+			if isinstance(widget, Gtk.ScrolledWindow):
+				found.append((widget, widget.get_vadjustment().get_value()))
+			stack.append(widget.get_first_child())
+		return found
+
+	def restore_scroll(self, scrolled):
+		"""Puts the views back once the rebuilt rows are laid out (the page height comes later)."""
+		for scroller, value in scrolled:
+			if value <= 0:
+				continue
+			frames = [30]
+
+			def tick(widget, _clock, value=value, frames=frames):
+				adj = widget.get_vadjustment()
+				adj.set_value(min(value, adj.get_upper() - adj.get_page_size()))
+				frames[0] -= 1
+				return frames[0] > 0 and abs(adj.get_value() - value) > 0.5
+			scroller.add_tick_callback(tick)
 
 	def confirm_monitors(self, seconds=15):
 		"""Asks to keep new monitor settings; undoes the whole Apply when the time runs out.
