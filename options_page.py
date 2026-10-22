@@ -35,6 +35,14 @@ def shown_value(option):
 	return str(option.value) if option.value not in (None, "") else "(empty)"
 
 
+def typed(spin):
+	"""The number in a spin row's text as typed, before Enter commits it, or None."""
+	try:
+		return float(spin.get_text().strip().replace(",", "."))
+	except ValueError:
+		return None
+
+
 def float_digits(value):
 	"""Enough decimals to show the value exactly (getoption gives at most 6)."""
 	text = f"{value:.6f}".rstrip("0")
@@ -181,8 +189,8 @@ class OptionsPage(Gtk.Box):
 		"""What a row shows: the pending value, the default for a pending reset, else Hyprland's value."""
 		pending = self.changes.get(option.name)
 		if pending is options.RESET:
-			default = options.default_value(option)
-			return option.value if default is None else default
+			after, _where = options.reset_value(option)
+			return option.value if after is None else after
 		return option.value if pending is None else pending
 
 	def row(self, option, full_name=False):
@@ -233,9 +241,15 @@ class OptionsPage(Gtk.Box):
 			row = Adw.SpinRow(title=title, subtitle=subtitle, adjustment=adjustment,
 				digits=0 if option.type == "int" else max(float_digits(v) for v in known))
 			row.set_value(value)
-			row.connect("notify::value", lambda r, _p: changed(
-				int(r.get_value()) if option.type == "int" else round(r.get_value(), 6)))
-			show = row.set_value
+			number = (lambda n: int(n)) if option.type == "int" else (lambda n: round(n, 6))
+			row.connect("notify::value", lambda r, _p: changed(number(r.get_value())))
+			# Typing only commits on Enter or leaving the box; count it as a change right away,
+			# or Apply stays off while the box already shows the new number.
+			row.connect("changed", lambda r: None if typed(r) is None else changed(number(typed(r))))
+
+			def show(v):
+				if typed(row) is None or not options.same_value(option.type, typed(row), v):
+					row.set_value(v)
 		elif option.type == "css":
 			row = Adw.ExpanderRow(title=title, subtitle=subtitle)
 			spins = []
@@ -247,6 +261,8 @@ class OptionsPage(Gtk.Box):
 				row.add_row(spin)
 			for spin in spins:
 				spin.connect("notify::value", lambda _s, _p: changed([int(s.get_value()) for s in spins]))
+				spin.connect("changed", lambda _s: changed([int(typed(s)) if typed(s) is not None else int(s.get_value())
+					for s in spins]))
 			summary = Gtk.Label(label=" ".join(str(v) for v in value), valign=Gtk.Align.CENTER)
 			row.add_suffix(summary)
 
@@ -254,7 +270,8 @@ class OptionsPage(Gtk.Box):
 				for spin, side in zip(spins, v):
 					spin.get_adjustment().set_lower(min(spin.get_adjustment().get_lower(), side))
 					spin.get_adjustment().set_upper(max(spin.get_adjustment().get_upper(), side))
-					spin.set_value(side)
+					if typed(spin) != side:
+						spin.set_value(side)
 				summary.set_label(" ".join(str(s) for s in v))
 		else:  # str
 			row = Adw.ActionRow(title=title, subtitle=subtitle)
@@ -277,24 +294,34 @@ class OptionsPage(Gtk.Box):
 
 	def add_badge(self, row, option):
 		"""Adds the source badge and Reset button; returns a function that brings both up to date."""
-		badge = Gtk.Label(css_classes=["caption", "dim-label"], valign=Gtk.Align.CENTER)
+		badge = Gtk.Label(css_classes=["caption", "dim-label"], valign=Gtk.Align.CENTER, wrap=True,
+			max_width_chars=16, justify=Gtk.Justification.RIGHT, xalign=1)
 		row.add_suffix(badge)
 		reset = None
 		if option.set and not option.locked():
-			default = options.default_value(option)
-			shown_default = option.default if default is None else shown_value(replace(option, value=default))
+			after, where = options.reset_value(option)
+			if after is None:
+				after = option.default if where == "default" else "its value there"
+			else:
+				after = shown_value(replace(option, value=after))
 			reset = Gtk.Button(label="Reset", valign=Gtk.Align.CENTER, css_classes=["flat", "caption"],
-				tooltip_text=f"Remove it from the config, so Hyprland uses its default ({shown_default})")
+				tooltip_text=f"Remove the dashboard's value, so {where} applies ({after})" if where != "default"
+				else f"Remove it from the config, so Hyprland uses its default ({after})")
 			reset.connect("clicked", lambda _b: self.set_change(option, options.RESET))
 			row.add_suffix(reset)
 
 		def update():
 			pending = self.changes.get(option.name)
 			if pending is options.RESET:
-				text, accent = "reset to default on Apply", "accent"
-				tip = "Apply removes it from the config; " + ("the value shown is the default"
-					if options.default_value(option) is not None
-					else f"the value shown is the current one, the default is {option.default}")
+				after, where = options.reset_value(option)
+				if where == "default":
+					text, accent = "reset to default on Apply", "accent"
+					tip = "Apply removes it from the config; " + ("the value shown is the default" if after is not None
+						else f"the value shown is the current one, the default is {option.default}")
+				else:
+					text, accent = f"reset to {where} on Apply", "accent"
+					tip = f"Apply removes the dashboard's value, so {where} applies; " + (
+						"the value shown is that one" if after is not None else "the value shown is the current one")
 			elif pending is not None and (problem := options.check_value(option, options.normalize(option.type, pending))):
 				text, accent, tip = f"can't apply: {problem}", "error", "Apply refuses this value; Hyprland keeps " + shown_value(option)
 			elif pending is not None:

@@ -155,6 +155,30 @@ def default_value(option):
 		return None
 
 
+def reset_value(option):
+	"""What a reset leaves: (value or None if unknown, where it comes from).
+
+	Resetting a dashboard override lets a file that also sets the option show through;
+	otherwise Hyprland falls back to its default."""
+	site = option.winner if option.mode() == "override" else None
+	if site is None:
+		return default_value(option), "default"
+	where = f"{os.path.relpath(site.file, hypr.HYPR_DIR)}:{site.line}"
+	if not site.literal:
+		return None, where
+	text = site.text.strip()
+	try:
+		if option.type == "bool":
+			return {"true": True, "false": False}.get(text), where
+		if option.type == "int":
+			return int(text, 0), where
+		if option.type == "float":
+			return float(text), where
+	except ValueError:
+		pass
+	return None, where
+
+
 def same_value(kind, a, b):
 	if kind == "float":
 		return abs(float(a) - float(b)) < 1e-4
