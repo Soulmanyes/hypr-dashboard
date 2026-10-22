@@ -11,12 +11,30 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+import hypr  # noqa: E402
 import options  # noqa: E402
 
 INT_RANGE = (-(2 ** 31), 2 ** 31 - 1)
 FLOAT_RANGE = (-1e6, 1e6)
 SEARCH_LIMIT = 80
 CSS_SIDES = ("top", "right", "bottom", "left")
+# Text options that only take a few words, as Hyprland 0.56 parses them. A value set
+# some other way (lua:<name> layouts, custom accel curves) is kept as an extra entry.
+STR_CHOICES = {
+	"general:layout": ["dwindle", "master", "scrolling", "monocle"],
+	"input:accel_profile": ["adaptive", "flat", "custom"],
+	"input:scroll_method": ["2fg", "edge", "on_button_down", "no_scroll"],
+	"input:touchpad:tap_button_map": ["lrm", "lmr"],
+	"master:center_master_fallback": ["left", "right", "top", "bottom"],
+	"master:new_on_active": ["before", "after", "none"],
+	"master:new_status": ["master", "slave", "inherit"],
+	"master:orientation": ["left", "right", "top", "bottom", "center"],
+	"render:cm_sdr_eotf": ["default", "auto", "srgb", "gamma22", "gamma22force"],
+	"scrolling:direction": ["right", "left", "down", "up"],
+}
+# Text options naming a monitor: offered the connected ones.
+MONITOR_OPTIONS = {"cursor:default_monitor", "input:tablet:output", "input:touchdevice:output"}
+MARKERS = {"[[EMPTY]]": "(not set)", "[[Auto]]": "(auto)", "": "(not set)"}
 
 
 def pretty(name):
@@ -35,7 +53,9 @@ def shown_value(option):
 		return next((label for label, v in option.choices if v == option.value), str(option.value))
 	if option.type == "float":
 		return options.to_lua("float", option.value)
-	return str(option.value) if option.value not in (None, "") else "(empty)"
+	if option.value in MARKERS:
+		return MARKERS[option.value]
+	return str(option.value) if option.value is not None else "(empty)"
 
 
 def typed(spin):
@@ -57,6 +77,7 @@ class OptionsPage(Gtk.Box):
 		super().__init__(orientation=Gtk.Orientation.HORIZONTAL)
 		self.on_change = on_change
 		self.options = []
+		self.monitor_names = []
 		self.files = {}
 		self.changes = {}
 		self.views = {}  # option name -> [(row, sync)] for every row showing it right now
@@ -85,6 +106,10 @@ class OptionsPage(Gtk.Box):
 	def load(self, state, keep_changes=False):
 		old = self.changes if keep_changes else {}
 		self.options, self.files = options.load(state)
+		try:
+			self.monitor_names = [m["name"] for m in hypr.hyprctl_json("monitors")]
+		except Exception:  # noqa: BLE001 - the monitor options just stay without them
+			self.monitor_names = []
 		self.by_name = {o.name: o for o in self.options}
 		# A kept change is dropped if the option became read-only meanwhile.
 		# A kept change is dropped too once Hyprland already has that value.
@@ -147,6 +172,14 @@ class OptionsPage(Gtk.Box):
 				new = shown_value(replace(option, value=options.normalize(option.type, value)))
 			lines.append((name, f"{shown_value(option)} → {new}"))
 		return lines
+
+	def str_choices(self, option):
+		"""The words a text option takes, or None for free text."""
+		if option.type != "str":
+			return None
+		if option.name in MONITOR_OPTIONS:
+			return self.monitor_names or None
+		return STR_CHOICES.get(option.name)
 
 	def set_change(self, option, value):
 		"""Records a pending change, or drops it when the value is back to what Hyprland has."""
@@ -230,7 +263,19 @@ class OptionsPage(Gtk.Box):
 				self.set_change(option, new)
 
 		default = options.default_value(option)
-		if option.type == "bool":
+		words = self.str_choices(option)
+		if words:
+			values = list(words)
+			for extra in (option.value, value, default):
+				if extra is not None and extra not in values:
+					values.append(extra)
+			row = Adw.ComboRow(title=title, subtitle=subtitle,
+				model=Gtk.StringList.new([MARKERS.get(v, v) for v in values]), selected=values.index(value))
+			# "(not set)" isn't a word to write: picking it removes the setting instead.
+			row.connect("notify::selected", lambda r, _p: changed(options.RESET
+				if values[r.get_selected()] in MARKERS and values[r.get_selected()] != option.value else values[r.get_selected()]))
+			show = lambda v: row.set_selected(values.index(v)) if v in values else None  # noqa: E731
+		elif option.type == "bool":
 			row = Adw.SwitchRow(title=title, subtitle=subtitle, active=bool(value))
 			row.connect("notify::active", lambda r, _p: changed(r.get_active()))
 			show = lambda v: row.set_active(bool(v))  # noqa: E731
