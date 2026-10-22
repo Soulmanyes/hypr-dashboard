@@ -49,6 +49,12 @@ after moving it). Start it from inside a Hyprland session.
   row shows the value it will get.
 - Animation styles and gesture actions have a menu of the values Hyprland
   accepts; you can still type your own (`popin 70%`).
+- Text options that only take a few words (layout, accel profile, scroll
+  method, the master and scrolling layout settings, `cm_sdr_eotf`) are menus
+  too, and the monitor options list your connected monitors. "(not set)"
+  removes the setting.
+- Nested options are titled with their group ("groupbar height", "blur
+  passes"), with Hyprland's description underneath.
 - Apply and Refresh keep each page scrolled where it was.
 
 ## Before you start: backups and getting back
@@ -56,8 +62,9 @@ after moving it). Start it from inside a Hyprland session.
 - **On first launch**, and on the first launch after you update the app, it
   copies your whole `~/.config/hypr` into `backups/` inside the app folder. If
   that copy fails, Apply stays off.
-- **Before anything is written**, Apply shows every file it would change with
-  the exact lines (removed in red, added in green). Nothing happens until you
+- **Before anything is written**, Apply lists every pending change in plain
+  words ("blur enabled: off → on", "Startup command …: remove"), then every
+  file it would change with the exact lines (removed in red, added in green). Nothing happens until you
   press Apply there; Cancel keeps your edits in the app.
 - **Every Apply** then saves the files it is about to change in
   `~/.config/hypr/backups/hypr-dashboard-apply-<time>/` (the last 20 are kept),
