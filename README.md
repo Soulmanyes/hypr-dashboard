@@ -24,7 +24,7 @@ them (comments, layout, order) exactly as it was.
 
 - Hyprland with a Lua config (`~/.config/hypr/hyprland.lua`). Made and tested
   on Hyprland 0.56.2. The older `hyprland.conf` format is not supported.
-- Python 3.9 or newer, PyGObject, GTK 4.10+, libadwaita 1.6+
+- Python 3.9 or newer, PyGObject, GTK 4.12+, libadwaita 1.6+
   (on Arch: `sudo pacman -S python-gobject gtk4 libadwaita`).
 
 ## Install

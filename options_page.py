@@ -61,6 +61,8 @@ class OptionsPage(Gtk.Box):
 
 		self.page = Adw.PreferencesPage(hexpand=True)
 		self.groups = []
+		self.rows = {}  # option name -> its row on the page right now, for jumping to it
+		self._shown = None  # (query, section) the rows were built for
 		self.append(self.page)
 
 	# Data ------------------------------------------------------------------
@@ -87,11 +89,24 @@ class OptionsPage(Gtk.Box):
 		if self.section not in self.section_names:
 			self.section = self.section_names[0]
 		self.sections.select_row(self.sections.get_row_at_index(self.section_names.index(self.section)))
-		self.show_rows()
+		self.show_rows(force=True)
 
 	def show_section(self, name):
 		if name in self.section_names:
 			self.sections.select_row(self.sections.get_row_at_index(self.section_names.index(name)))
+
+	def reveal(self, name):
+		"""Shows the section holding option name with no search; returns its row (or None)."""
+		option = self.by_name.get(name)
+		if option is None:
+			return None
+		self.section = option.section
+		self.search.set_text("")  # its delayed search-changed finds the rows already built
+		self._filling = True
+		self.show_section(option.section)
+		self._filling = False
+		self.show_rows()
+		return self.rows.get(name)
 
 	def on_section(self, _box, row):
 		if row is None or self._filling:
@@ -112,11 +127,15 @@ class OptionsPage(Gtk.Box):
 
 	# Rows ------------------------------------------------------------------
 
-	def show_rows(self):
+	def show_rows(self, force=False):
+		query = self.search.get_text().strip().lower()
+		if not force and self.groups and self._shown == (query, self.section):
+			return  # already showing these (a search box clearing late, or a repeat)
+		self._shown = (query, self.section)
 		for group in self.groups:
 			self.page.remove(group)
 		self.groups = []
-		query = self.search.get_text().strip().lower()
+		self.rows = {}
 		if query:
 			shown = [o for o in self.options if query in o.name.lower() or query in o.description.lower()]
 			title = f"{len(shown)} matching"
@@ -133,7 +152,8 @@ class OptionsPage(Gtk.Box):
 		for title, opts in groups:
 			group = Adw.PreferencesGroup(title=GLib.markup_escape_text(title.replace(":", " › ")))
 			for o in opts:
-				group.add(self.row(o, full_name=bool(query)))
+				self.rows[o.name] = self.row(o, full_name=bool(query))
+				group.add(self.rows[o.name])
 			self.page.add(group)
 			self.groups.append(group)
 		self.page.scroll_to_top()
@@ -210,5 +230,5 @@ class OptionsPage(Gtk.Box):
 		if option.set and not option.locked() and pending is not options.RESET:
 			reset = Gtk.Button(label="Reset", valign=Gtk.Align.CENTER, css_classes=["flat", "caption"],
 				tooltip_text=f"Reset to default ({option.default})")
-			reset.connect("clicked", lambda _b: (self.set_change(option, options.RESET), self.show_rows()))
+			reset.connect("clicked", lambda _b: (self.set_change(option, options.RESET), self.show_rows(force=True)))
 			row.add_suffix(reset)

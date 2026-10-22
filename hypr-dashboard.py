@@ -33,7 +33,7 @@ import rules  # noqa: E402
 from items_page import ItemsPages  # noqa: E402
 from lists_page import ListsPages  # noqa: E402
 from options_page import OptionsPage  # noqa: E402
-from search import ResultsPage, SearchablePage, matches  # noqa: E402
+from search import ResultsPage, SearchablePage, load_css, matches, scroll_and_flash  # noqa: E402
 
 NONE = "(none)"
 APP_ID = "dev.hyprdashboard.HyprDashboard"
@@ -92,7 +92,7 @@ class Dashboard(Adw.ApplicationWindow):
 			box.append(Gtk.Image(icon_name=icon))
 			box.append(Gtk.Label(label=title, xalign=0))
 			nav.append(Gtk.ListBoxRow(child=box, name=name))
-		self.results = ResultsPage(self.open_page)
+		self.results = ResultsPage()
 		stack.add_named(self.results, "search")
 		nav.connect("row-selected", self.on_nav)
 		self.nav = nav
@@ -190,12 +190,30 @@ class Dashboard(Adw.ApplicationWindow):
 			row = self.nav.get_selected_row()
 			self.stack.set_visible_child_name(row.get_name() if row else "options")
 			return
-		options = [(GLib.markup_escape_text(o.name), o.description) for o in self.options_page.options
-			if matches(f"{o.name} {o.name.replace('_', ' ')} {o.description}", query)]
-		sources = [("options", "Options", options)]
-		sources += [(name, self.page_titles[name], page.results(query)) for name, page in self.searchables.items()]
+		page = self.options_page
+		options_hits = [(o.name, o.description, lambda n=o.name: self.jump_to("options", n), page.row(o, full_name=True))
+			for o in page.options if matches(f"{o.name} {o.name.replace('_', ' ')} {o.description}", query)][:80]
+		sources = [("Options", options_hits)]
+		for name, searchable in self.searchables.items():
+			hits = [(title, subtitle, lambda n=name, r=row: self.jump_to(n, r), None)
+				for title, subtitle, row in searchable.results(query)]
+			sources.append((self.page_titles[name], hits))
 		self.results.show(query, sources)
 		self.stack.set_visible_child_name("search")
+
+	def jump_to(self, name, target):
+		"""Opens page name at target (an option name on Options, else the row itself) and flashes it."""
+		self.global_search.set_text("")
+		self.nav.select_row(self.nav.get_row_at_index(self.page_names.index(name)))
+		self.stack.set_visible_child_name(name)
+		if name == "options":
+			row = self.options_page.reveal(target)
+		else:
+			self.searchables[name].show_all()
+			row = target
+		if row is not None:
+			# Let the page lay out first, so the row has its final position.
+			GLib.timeout_add(150, lambda: scroll_and_flash(row))
 
 	def open_page(self, name, query):
 		"""Opens a page from the overall search, filtered by the same words."""
@@ -606,6 +624,10 @@ class App(Adw.Application):
 		flags = Gio.ApplicationFlags.NON_UNIQUE if page else Gio.ApplicationFlags.DEFAULT_FLAGS
 		super().__init__(application_id=APP_ID, flags=flags)
 		self.page = page
+
+	def do_startup(self):
+		Adw.Application.do_startup(self)
+		load_css()
 
 	def do_activate(self):
 		window = self.props.active_window or Dashboard(self, self.page)

@@ -17,12 +17,12 @@ fi
 
 missing=()
 command -v python3 >/dev/null || missing+=("python3")
-python3 - <<'PY' 2>/dev/null || missing+=("PyGObject with GTK 4.10+ and libadwaita 1.6+")
+python3 - <<'PY' 2>/dev/null || missing+=("PyGObject with GTK 4.12+ and libadwaita 1.6+")
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk
-assert (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 10)
+assert (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 12)
 assert (Adw.get_major_version(), Adw.get_minor_version()) >= (1, 6)
 PY
 command -v hyprctl >/dev/null || missing+=("hyprctl (Hyprland)")

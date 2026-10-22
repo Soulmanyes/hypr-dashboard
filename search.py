@@ -7,7 +7,8 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+gi.require_version("Graphene", "1.0")
+from gi.repository import Adw, Gdk, GLib, Graphene, Gtk  # noqa: E402
 
 RESULT_LIMIT = 150
 
@@ -102,40 +103,55 @@ class SearchablePage(Gtk.Box):
 			group.set_visible(not query or shown > 0 or (group_hit and not rows))
 
 	def results(self, query):
-		"""(title, subtitle) for every row on this page that matches."""
+		"""(title, subtitle, row) for every row on this page that matches."""
 		out = []
 		for group in groups(self.page):
 			group_title = _plain(group.get_title() or "")
 			for row in top_rows(group):
 				if matches(f"{group_title} {texts(row)}", query):
 					subtitle = _plain(row.get_subtitle() or "") if hasattr(row, "get_subtitle") else ""
-					out.append((row_title(row), " · ".join(x for x in (group_title, subtitle) if x)))
+					out.append((row_title(row), " · ".join(x for x in (group_title, subtitle) if x), row))
 		return out
+
+	def show_all(self):
+		"""Clears the filter right away (not after the search box's delay)."""
+		self.entry.set_text("")
+		self.refilter()
 
 
 class ResultsPage(Adw.PreferencesPage):
-	"""Matches from every page, grouped by page; clicking one opens it there."""
+	"""Matches from every page, grouped by page.
 
-	def __init__(self, open_page):
+	Options come as their real controls (change them right here); every result
+	has a jump that opens the page at that setting and highlights it.
+	"""
+
+	def __init__(self):
 		super().__init__()
-		self.open_page = open_page
 		self.shown = []
 
 	def show(self, query, sources):
-		"""sources: [(page name, page title, [(title, subtitle)])]."""
+		"""sources: [(page title, [hit])], a hit being (title, subtitle, jump, live row or None)."""
 		for group in self.shown:
 			self.remove(group)
 		self.shown = []
 		total = 0
-		for name, page_title, hits in sources:
+		for page_title, hits in sources:
 			if not hits:
 				continue
 			group = Adw.PreferencesGroup(title=GLib.markup_escape_text(f"{page_title} ({len(hits)})"))
-			for title, subtitle in hits[:max(0, RESULT_LIMIT - total)]:
+			for title, subtitle, jump, live in hits[:max(0, RESULT_LIMIT - total)]:
+				if live is not None:
+					go = Gtk.Button(icon_name="find-location-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"],
+						tooltip_text="Show where it is")
+					go.connect("clicked", lambda _b, jump=jump: jump())
+					live.add_suffix(go)
+					group.add(live)
+					continue
 				row = Adw.ActionRow(title=title or "(untitled)", subtitle=GLib.markup_escape_text(subtitle),
-					activatable=True, subtitle_lines=2)
-				row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-				row.connect("activated", lambda _r, name=name: self.open_page(name, query))
+					activatable=True, subtitle_lines=2, tooltip_text="Show where it is")
+				row.add_suffix(Gtk.Image(icon_name="find-location-symbolic"))
+				row.connect("activated", lambda _r, jump=jump: jump())
 				group.add(row)
 			total += len(hits)
 			self.add(group)
@@ -146,3 +162,37 @@ class ResultsPage(Adw.PreferencesPage):
 			self.add(group)
 			self.shown.append(group)
 		self.scroll_to_top()
+
+
+HIGHLIGHT_CSS = """
+@keyframes jump-flash {
+	from { background-color: alpha(@accent_bg_color, 0.55); }
+	to { background-color: alpha(@accent_bg_color, 0); }
+}
+.jump-highlight { animation: jump-flash 2.4s ease-out; }
+"""
+
+
+def load_css():
+	provider = Gtk.CssProvider()
+	provider.load_from_string(HIGHLIGHT_CSS)
+	Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider,
+		Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
+def scroll_and_flash(row):
+	"""Scrolls row into the middle of its page and flashes it."""
+	scroller = row.get_ancestor(Gtk.ScrolledWindow)
+	if scroller is not None:
+		content = scroller.get_child()
+		if isinstance(content, Gtk.Viewport):
+			content = content.get_child()
+		ok, point = row.compute_point(content, Graphene.Point())
+		if ok:
+			adj = scroller.get_vadjustment()
+			target = point.y - (adj.get_page_size() - row.get_height()) / 3
+			adj.set_value(max(adj.get_lower(), min(target, adj.get_upper() - adj.get_page_size())))
+	row.remove_css_class("jump-highlight")  # restart the animation if it's still running
+	row.add_css_class("jump-highlight")
+	GLib.timeout_add(2600, lambda: row.remove_css_class("jump-highlight") or False)
+	return False
