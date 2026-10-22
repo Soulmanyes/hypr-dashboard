@@ -3,6 +3,8 @@
 Changes are only collected here (self.changes); the window's Apply button
 writes them through options.apply together with the rules.
 """
+from dataclasses import replace
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -46,6 +48,8 @@ class OptionsPage(Gtk.Box):
 		self.options = []
 		self.files = {}
 		self.changes = {}
+		self.views = {}  # option name -> [(row, sync)] for every row showing it right now
+		self._syncing = False  # set while sync() moves widgets, so that isn't taken as an edit
 		self.section = "general"
 
 		side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, width_request=210)
@@ -72,7 +76,10 @@ class OptionsPage(Gtk.Box):
 		self.options, self.files = options.load(state)
 		self.by_name = {o.name: o for o in self.options}
 		# A kept change is dropped if the option became read-only meanwhile.
-		self.changes = {n: v for n, v in old.items() if n in self.by_name and not self.by_name[n].locked()}
+		# A kept change is dropped too once Hyprland already has that value.
+		self.changes = {n: v for n, v in old.items() if n in self.by_name and not self.by_name[n].locked()
+			and (v is options.RESET or not options.same_value(self.by_name[n].type, self.by_name[n].value, v))}
+		self.views = {}
 		counts = {}
 		for o in self.options:
 			counts[o.section] = counts.get(o.section, 0) + 1
@@ -123,7 +130,19 @@ class OptionsPage(Gtk.Box):
 			self.changes.pop(option.name, None)
 		else:
 			self.changes[option.name] = value
+		self.sync(option.name)
 		self.on_change()
+
+	def sync(self, name):
+		"""Brings every row showing option name up to date with its value and pending change."""
+		alive = [(row, sync) for row, sync in self.views.get(name, []) if row.get_root() is not None]
+		self.views[name] = alive
+		self._syncing = True
+		try:
+			for _row, sync in alive:
+				sync()
+		finally:
+			self._syncing = False
 
 	# Rows ------------------------------------------------------------------
 
@@ -158,12 +177,21 @@ class OptionsPage(Gtk.Box):
 			self.groups.append(group)
 		self.page.scroll_to_top()
 
+	def shown(self, option):
+		"""What a row shows: the pending value, the default for a pending reset, else Hyprland's value."""
+		pending = self.changes.get(option.name)
+		if pending is options.RESET:
+			default = options.default_value(option)
+			return option.value if default is None else default
+		return option.value if pending is None else pending
+
 	def row(self, option, full_name=False):
+		"""A row for option. Several rows can show one option (here and in Search everything);
+		every change re-syncs all of them, so none keeps an old value."""
 		title = GLib.markup_escape_text(option.name if full_name else pretty(option.name))
 		subtitle = GLib.markup_escape_text(option.description)
 		locked = option.locked()
-		pending = self.changes.get(option.name)
-		value = option.value if pending is None or pending is options.RESET else pending
+		value = self.shown(option)
 
 		if locked:
 			row = Adw.ActionRow(title=title, subtitle=subtitle, tooltip_text=locked)
@@ -173,31 +201,41 @@ class OptionsPage(Gtk.Box):
 			self.add_badge(row, option)
 			return row
 
+		def changed(new):
+			if not self._syncing:
+				self.set_change(option, new)
+
+		default = options.default_value(option)
 		if option.type == "bool":
 			row = Adw.SwitchRow(title=title, subtitle=subtitle, active=bool(value))
-			row.connect("notify::active", lambda r, _p: self.set_change(option, r.get_active()))
+			row.connect("notify::active", lambda r, _p: changed(r.get_active()))
+			show = lambda v: row.set_active(bool(v))  # noqa: E731
 		elif option.choices:
 			labels = [label for label, _ in option.choices]
 			values = [v for _, v in option.choices]
-			if value not in values:
-				labels.append(str(value))
-				values.append(value)
+			for extra in (option.value, value, default):
+				if extra is not None and extra not in values:
+					labels.append(str(extra))
+					values.append(extra)
 			row = Adw.ComboRow(title=title, subtitle=subtitle, model=Gtk.StringList.new(labels),
 				selected=values.index(value))
-			row.connect("notify::selected", lambda r, _p: self.set_change(option, values[r.get_selected()]))
+			row.connect("notify::selected", lambda r, _p: changed(values[r.get_selected()]))
+			show = lambda v: row.set_selected(values.index(v))  # noqa: E731
 		elif option.type in ("int", "float"):
 			low, high = INT_RANGE if option.type == "int" else FLOAT_RANGE
-			# Widen the range to the live value so set_value never clamps it.
-			low = min(option.min if option.min is not None else low, value)
-			high = max(option.max if option.max is not None else high, value)
+			# Widen the range to the live, shown and default values so set_value never clamps them.
+			known = [v for v in (option.value, value, default) if v is not None]
+			low = min(option.min if option.min is not None else low, *known)
+			high = max(option.max if option.max is not None else high, *known)
 			span = high - low
 			step = 1 if option.type == "int" else (0.05 if span <= 2 else 0.1 if span <= 20 else 1)
 			adjustment = Gtk.Adjustment(lower=low, upper=high, step_increment=step, page_increment=step * 10)
 			row = Adw.SpinRow(title=title, subtitle=subtitle, adjustment=adjustment,
-				digits=0 if option.type == "int" else float_digits(value))
+				digits=0 if option.type == "int" else max(float_digits(v) for v in known))
 			row.set_value(value)
-			row.connect("notify::value", lambda r, _p: self.set_change(option,
+			row.connect("notify::value", lambda r, _p: changed(
 				int(r.get_value()) if option.type == "int" else round(r.get_value(), 6)))
+			show = row.set_value
 		elif option.type == "css":
 			row = Adw.ExpanderRow(title=title, subtitle=subtitle)
 			spins = []
@@ -208,27 +246,70 @@ class OptionsPage(Gtk.Box):
 				spins.append(spin)
 				row.add_row(spin)
 			for spin in spins:
-				spin.connect("notify::value", lambda _s, _p: self.set_change(option, [int(s.get_value()) for s in spins]))
-			row.add_suffix(Gtk.Label(label=" ".join(str(v) for v in value), valign=Gtk.Align.CENTER))
+				spin.connect("notify::value", lambda _s, _p: changed([int(s.get_value()) for s in spins]))
+			summary = Gtk.Label(label=" ".join(str(v) for v in value), valign=Gtk.Align.CENTER)
+			row.add_suffix(summary)
+
+			def show(v):
+				for spin, side in zip(spins, v):
+					spin.get_adjustment().set_lower(min(spin.get_adjustment().get_lower(), side))
+					spin.get_adjustment().set_upper(max(spin.get_adjustment().get_upper(), side))
+					spin.set_value(side)
+				summary.set_label(" ".join(str(s) for s in v))
 		else:  # str
 			row = Adw.ActionRow(title=title, subtitle=subtitle)
 			entry = Gtk.Entry(text=value or "", valign=Gtk.Align.CENTER, width_chars=18)
-			entry.connect("changed", lambda e: self.set_change(option, e.get_text()))
+			entry.connect("changed", lambda e: changed(e.get_text()))
 			row.add_suffix(entry)
 
-		self.add_badge(row, option)
+			def show(v):
+				if entry.get_text() != (v or ""):  # don't move the cursor of the entry being typed in
+					entry.set_text(v or "")
+
+		update_badge = self.add_badge(row, option)
+
+		def sync():
+			show(self.shown(option))
+			update_badge()
+
+		self.views.setdefault(option.name, []).append((row, sync))
 		return row
 
 	def add_badge(self, row, option):
-		pending = self.changes.get(option.name)
-		if pending is options.RESET:
-			text, css = "reset on Apply", ["accent"]
-		else:
-			text, css = option.source(), []
-		badge = Gtk.Label(label=text, css_classes=["caption", "dim-label", *css], valign=Gtk.Align.CENTER)
+		"""Adds the source badge and Reset button; returns a function that brings both up to date."""
+		badge = Gtk.Label(css_classes=["caption", "dim-label"], valign=Gtk.Align.CENTER)
 		row.add_suffix(badge)
-		if option.set and not option.locked() and pending is not options.RESET:
+		reset = None
+		if option.set and not option.locked():
+			default = options.default_value(option)
+			shown_default = option.default if default is None else shown_value(replace(option, value=default))
 			reset = Gtk.Button(label="Reset", valign=Gtk.Align.CENTER, css_classes=["flat", "caption"],
-				tooltip_text=f"Reset to default ({option.default})")
-			reset.connect("clicked", lambda _b: (self.set_change(option, options.RESET), self.show_rows(force=True)))
+				tooltip_text=f"Remove it from the config, so Hyprland uses its default ({shown_default})")
+			reset.connect("clicked", lambda _b: self.set_change(option, options.RESET))
 			row.add_suffix(reset)
+
+		def update():
+			pending = self.changes.get(option.name)
+			if pending is options.RESET:
+				text, accent = "reset to default on Apply", "accent"
+				tip = "Apply removes it from the config; " + ("the value shown is the default"
+					if options.default_value(option) is not None
+					else f"the value shown is the current one, the default is {option.default}")
+			elif pending is not None and (problem := options.check_value(option, options.normalize(option.type, pending))):
+				text, accent, tip = f"can't apply: {problem}", "error", "Apply refuses this value; Hyprland keeps " + shown_value(option)
+			elif pending is not None:
+				text, accent, tip = "changed, not applied", "accent", f"Hyprland has {shown_value(option)} until you press Apply"
+			else:
+				text, accent, tip = option.source(), None, None
+			badge.set_label(text)
+			badge.set_tooltip_text(tip)
+			for css in ("accent", "error"):
+				if css == accent:
+					badge.add_css_class(css)
+				else:
+					badge.remove_css_class(css)
+			if reset is not None:
+				reset.set_visible(pending is not options.RESET)
+
+		update()
+		return update

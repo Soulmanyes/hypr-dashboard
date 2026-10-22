@@ -140,6 +140,21 @@ def check_value(option, value):
 	return None
 
 
+def default_value(option):
+	"""The value a reset gives, in the form getoption reports, or None if unknown."""
+	if option.default is None:
+		return None
+	try:
+		value = parse_live(option.type, option.default)
+		if option.type == "bool":
+			return value if isinstance(value, bool) else str(value).lower() in ("1", "true", "yes", "on")
+		if option.type == "int":
+			return int(value)
+		return value
+	except (TypeError, ValueError):
+		return None
+
+
 def same_value(kind, a, b):
 	if kind == "float":
 		return abs(float(a) - float(b)) < 1e-4
