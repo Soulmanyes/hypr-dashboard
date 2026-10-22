@@ -132,6 +132,19 @@ class OptionsPage(Gtk.Box):
 		else:
 			self.show_rows()
 
+	def describe(self):
+		"""(option name, old → new) per pending change, for the Apply review."""
+		lines = []
+		for name, value in sorted(self.changes.items()):
+			option = self.by_name[name]
+			if value is options.RESET:
+				after, where = options.reset_value(option)
+				new = where if after is None else f"{where} ({shown_value(replace(option, value=after))})"
+			else:
+				new = shown_value(replace(option, value=options.normalize(option.type, value)))
+			lines.append((name, f"{shown_value(option)} → {new}"))
+		return lines
+
 	def set_change(self, option, value):
 		"""Records a pending change, or drops it when the value is back to what Hyprland has."""
 		if value is not options.RESET and options.same_value(option.type, option.value, value):

@@ -534,7 +534,31 @@ class Dashboard(Adw.ApplicationWindow):
 		if not changed:
 			self.toasts.add_toast(Adw.Toast(title="Nothing to change in any file."))
 			return
-		review.show(self, changed, lambda: self.commit(prepared))
+		sections = [
+			("Settings", page.describe()),
+			("Monitors, variables and startup", self.items.pending.describe()),
+			("Binds, rules, animations, gestures and devices", self.lists.pending.describe()),
+			("Gaming apps and extra rules", self.describe_state()),
+		]
+		review.show(self, changed, lambda: self.commit(prepared), sections=sections)
+
+	def describe_state(self):
+		"""(what, change) for edits to the gaming apps and extra rules (dashboard.json)."""
+		old = json.loads(self.saved)
+		lines = [("Gaming app", f"add {p}") for p in self.state["gaming_apps"] if p not in old["gaming_apps"]]
+		lines += [("Gaming app", f"remove {p}") for p in old["gaming_apps"] if p not in self.state["gaming_apps"]]
+
+		def label(rule):
+			return rule["name"] or next((v for v in rule["match"].values() if v), "unnamed rule")
+		names_before = [label(r) for r in old["rules"]]
+		for rule in self.state["rules"]:
+			if rule in old["rules"]:
+				continue
+			lines.append(("Extra rule " + label(rule), "change" if label(rule) in names_before else "add"))
+		names_now = [label(r) for r in self.state["rules"]]
+		lines += [("Extra rule " + label(r), "remove") for r in old["rules"]
+			if r not in self.state["rules"] and label(r) not in names_now]
+		return lines
 
 	def commit(self, prepared):
 		"""Writes a reviewed Apply."""

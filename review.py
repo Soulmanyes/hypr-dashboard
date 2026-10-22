@@ -1,6 +1,6 @@
 """The "Review changes" dialog shown before an Apply writes anything.
 
-One section per file, with the changed lines and a little context around
+A summary of what changes, in the words the pages use, then one section per file, with the changed lines and a little context around
 them (removed lines in red, added in green), and Apply / Cancel buttons.
 """
 import difflib
@@ -58,13 +58,32 @@ def diff_view(old, new):
 	return view
 
 
-def show(parent, changed, on_confirm, title="Review changes"):
-	"""changed: {path: (old text, new text)}. Calls on_confirm() only if the user presses Apply."""
+def summary_list(lines):
+	"""A boxed list with one row per (what, change)."""
+	box = Gtk.ListBox(css_classes=["boxed-list"], selection_mode=Gtk.SelectionMode.NONE)
+	for what, change in lines:
+		row = Adw.ActionRow(title=GLib.markup_escape_text(what))
+		# Wrap only when it doesn't fit, not as soon as the title wants room.
+		row.add_suffix(Gtk.Label(label=change, wrap=True, natural_wrap_mode=Gtk.NaturalWrapMode.NONE,
+			max_width_chars=50, xalign=1, justify=Gtk.Justification.RIGHT, valign=Gtk.Align.CENTER))
+		box.append(row)
+	return box
+
+
+def show(parent, changed, on_confirm, title="Review changes", sections=()):
+	"""changed: {path: (old text, new text)}; sections: [(title, [(what, change)])] shown above the files.
+	Calls on_confirm() only if the user presses Apply."""
 	dialog = Adw.Dialog(title=title, content_width=820, content_height=640)
 	box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=12, margin_bottom=12,
 		margin_start=12, margin_end=12)
 	box.append(Gtk.Label(label="Nothing is written until you press Apply. Removed lines are red, added lines green.",
 		wrap=True, xalign=0, css_classes=["dim-label"]))
+	for heading, lines in sections:
+		if lines:
+			box.append(Gtk.Label(label=heading, xalign=0, css_classes=["heading"]))
+			box.append(summary_list(lines))
+	if any(lines for _, lines in sections):
+		box.append(Gtk.Label(label="In the files", xalign=0, css_classes=["heading"], margin_top=6))
 	order = sorted(changed, key=lambda p: (p in BOOKKEEPING, p))
 	for path in order:
 		old, new = changed[path]

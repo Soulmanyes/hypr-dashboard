@@ -264,6 +264,35 @@ class Pending:
 		op = self.ops.get(("text", self.call_key(call), arg.start))
 		return op[3] if op else None
 
+	def describe(self):
+		"""(what, change) per pending edit, for the Apply review."""
+		lines = []
+		deleted = {self.call_key(op[1]) for op in self.ops.values() if op[0] == "delete"}
+		for op in self.ops.values():
+			kind = op[0]
+			if kind == "add":
+				_, fn, _text, label = op
+				lines.append((f"New {items.CALL_NAMES.get(fn, fn).lower()}", label))
+				continue
+			call = op[1]
+			what = items.call_label(call)
+			if kind == "delete":
+				lines.append((what, "remove"))
+			elif self.call_key(call) in deleted:
+				continue
+			elif kind == "field":
+				_, _call, path, value = op
+				site, current = self.lists.field(call, path)
+				old = current.value if site is not None and current.kind == "literal" else None
+				name = ".".join(str(p) for p in path if not isinstance(p, int)) or "value"
+				lines.append((f"{what} {name}", "remove" if value is RESET else items.change(old, value)))
+			elif kind == "text":
+				_, _call, _arg, value, current = op
+				lines.append((what, items.change(current.value, value)))
+			elif kind == "span":
+				lines.append((what, items.change(None, op[4])))
+		return lines
+
 	# Planning ----------------------------------------------------------------
 
 	def plan(self, edits):

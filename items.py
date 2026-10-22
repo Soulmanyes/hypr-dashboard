@@ -29,6 +29,45 @@ def rel(path):
 	return os.path.relpath(path, hypr.HYPR_DIR)
 
 
+def say(value):
+	"""A value as the Apply review shows it."""
+	if value is RESET:
+		return "default"
+	if isinstance(value, bool):
+		return "on" if value else "off"
+	if isinstance(value, (list, tuple)):
+		return " ".join(say(v) for v in value)
+	if isinstance(value, float):
+		return f"{value:g}"
+	return "(empty)" if value in (None, "") else str(value)
+
+
+def literal_or_none(arg_or_site):
+	"""The literal value of an argument, field or global, or None if it's computed."""
+	try:
+		return luasrc.literal_value(arg_or_site)
+	except Exception:  # noqa: BLE001 - only used to show the old value
+		return None
+
+
+CALL_NAMES = {"exec_cmd": "Startup command", "env": "Environment variable", "monitor": "Monitor", "bind": "Bind",
+	"window_rule": "Window rule", "workspace_rule": "Workspace rule", "curve": "Curve", "animation": "Animation",
+	"gesture": "Gesture", "device": "Device"}
+
+
+def call_label(call):
+	"""A call as the Apply review names it: its kind and first literal argument, else where it is."""
+	kind = CALL_NAMES.get(call.fn, call.fn)
+	first = literal_or_none(call.args[0]) if call.args else None
+	if isinstance(first, (str, int, float)) and not isinstance(first, bool) and str(first):
+		return f"{kind} {first}"
+	return f"{kind} ({rel(call.file)}:{call.line})"
+
+
+def change(old, new):
+	return f"{say(old)} → {say(new)}" if old is not None else say(new)
+
+
 def to_lua(value):
 	if isinstance(value, bool):
 		return "true" if value else "false"
@@ -217,6 +256,40 @@ class Pending:
 
 	def add_exec(self, command):
 		self.set(("add_exec", command), ("add_exec", command))
+
+	def describe(self):
+		"""(what, change) per pending edit, in the words the pages use, for the Apply review."""
+		lines = []
+		deleted = {(op[1].file, op[1].start) for op in self.ops.values() if op[0] == "delete"}
+		for op in self.ops.values():
+			kind = op[0]
+			if kind in ("arg", "toggle") and (op[1].file, op[1].start) in deleted:
+				continue
+			if kind == "monitor_field":
+				_, monitor, key, value = op
+				f = monitor.fields.get(key)
+				old = literal_or_none(f) if f is not None and f.literal else None
+				lines.append((f"Monitor {monitor.output}: {key}", change(old, value)))
+			elif kind == "add_monitor":
+				lines.append((f"Monitor {op[1].output}", "add its current setup to the config"))
+			elif kind in ("arg_like", "var_ref"):
+				_, glob, value = op
+				new = value[1] if kind == "var_ref" and isinstance(value, tuple) else value
+				lines.append((f"Variable {glob.name}", change(literal_or_none(glob) if glob.literal else None, new)))
+			elif kind == "arg":
+				_, call, index, value = op
+				lines.append((call_label(call), change(literal_or_none(call.args[index]), value)))
+			elif kind == "delete":
+				call = op[1]
+				lines.append((call_label(call), "remove"))
+			elif kind == "toggle":
+				_, call, enabled = op
+				lines.append((call_label(call), "turn on" if enabled else "turn off"))
+			elif kind == "add_env":
+				lines.append((f"Environment variable {op[1]}", f"add: {op[2]}"))
+			elif kind == "add_exec":
+				lines.append(("Startup command", f"add: {op[1]}"))
+		return lines
 
 	def touches_monitors(self):
 		return any(op[0] in ("monitor_field", "add_monitor") for op in self.ops.values())
