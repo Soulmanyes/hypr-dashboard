@@ -20,7 +20,10 @@ CSS_SIDES = ("top", "right", "bottom", "left")
 
 
 def pretty(name):
-	return name.rsplit(":", 1)[-1].replace("_", " ").replace(".", " ")
+	"""Row title: the last part of the name, with its group when nested (group:groupbar:height
+	is "groupbar height"), since "height" alone says nothing."""
+	parts = name.split(":")
+	return " ".join(parts[-2:] if len(parts) > 2 else parts[-1:]).replace("_", " ").replace(".", " ")
 
 
 def shown_value(option):
