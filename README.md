@@ -3,7 +3,9 @@
 A GTK app for editing a Hyprland **Lua** config without opening the files:
 options, monitors, workspaces, keybinds, window rules, animations, gestures,
 per-device input, variables, environment and autostart. Every page has a
-search box, and "Search everything" in the sidebar looks across all of them.
+search box, and "Search everything" in the sidebar looks across all of them:
+options can be changed right in the results, and clicking a result jumps to
+that setting on its page and briefly highlights it.
 
 It edits your own hand-written files in place and keeps everything else in
 them (comments, layout, order) exactly as it was.
