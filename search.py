@@ -170,6 +170,14 @@ HIGHLIGHT_CSS = """
 	to { background-color: alpha(@accent_bg_color, 0); }
 }
 .jump-highlight { animation: jump-flash 2.4s ease-out; }
+/* SpinRow numbers are borderless; a box shows they can be typed into. */
+row.spin spinbutton > text {
+	border: 1px solid alpha(currentColor, 0.25);
+	border-radius: 6px;
+	padding: 0 6px;
+	margin: 8px 4px;
+}
+row.spin spinbutton > text:focus-within { border-color: @accent_color; }
 """
 
 
