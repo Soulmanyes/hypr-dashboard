@@ -42,11 +42,13 @@ after moving it). Start it from inside a Hyprland session.
 ## Update
 
 ```sh
-git -C ~/hypr-dashboard pull
+dir=$(sed -n 's|^Exec=python3 "\(.*\)/hypr-dashboard.py"$|\1|p' ~/.local/share/applications/dev.hyprdashboard.HyprDashboard.desktop) && git -C "${dir:?run install.sh first}" pull
 ```
 
-Then close and reopen the app. You don't need to run `install.sh` again. On
-the first launch after an update, the app backs up `~/.config/hypr` again.
+This finds the app folder from the launcher entry `install.sh` made, so it
+works from any folder and wherever you cloned the app. Then close and reopen
+the app. You don't need to run `install.sh` again. On the first launch after
+an update, the app backs up `~/.config/hypr` again.
 
 ## While you edit
 
