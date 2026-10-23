@@ -39,6 +39,15 @@ git clone https://github.com/Soulmanyes/hypr-dashboard ~/hypr-dashboard
 The app runs from that folder, so keep it there (or run `install.sh` again
 after moving it). Start it from inside a Hyprland session.
 
+## Update
+
+```sh
+git -C ~/hypr-dashboard pull
+```
+
+Then close and reopen the app. You don't need to run `install.sh` again. On
+the first launch after an update, the app backs up `~/.config/hypr` again.
+
 ## While you edit
 
 - Every row of an option shows the same value, also in Search everything.
@@ -52,8 +61,9 @@ after moving it). Start it from inside a Hyprland session.
   start a new Extra rule for it. Rules built in loops, or matching on things
   the app can't check (workspace, modal), are listed under "Can't tell".
   Regexes have to match the whole class or title, like in Hyprland.
-- Animation styles and gesture actions have a menu of the values Hyprland
-  accepts; you can still type your own (`popin 70%`).
+- Animation styles and gesture directions and actions have a menu of the
+  values Hyprland accepts; you can still type your own (`popin 70%`). Adding
+  a gesture and editing one use the same fields (fingers 2 to 5).
 - Text options that only take a few words (layout, accel profile, scroll
   method, the master and scrolling layout settings, `cm_sdr_eotf`) are menus
   too, and the monitor options list your connected monitors. "(not set)"
