@@ -19,6 +19,9 @@ MATCH_KEYS = ["class", "title", "initial_class", "initial_title", "tag", "xwayla
 	"pin", "focus", "group", "modal", "workspace", "content", "xdg_tag"]
 DIRECTIONS = ["horizontal", "vertical", "left", "right", "up", "down", "swipe", "pinch", "pinchin", "pinchout"]
 GESTURE_ACTIONS = ["workspace", "move", "resize", "special", "close", "fullscreen", "float", "dispatcher", "cursorZoom"]
+GESTURE_FINGERS = (2, 5)
+# Editors shared by "Add a gesture" and the rows of existing gestures: a (min, max) or a menu of values.
+GESTURE_EDITORS = {"fingers": GESTURE_FINGERS, "direction": DIRECTIONS, "action": GESTURE_ACTIONS}
 SLIDE = ["slide", "slide top", "slide bottom", "slide left", "slide right"]
 # Styles Hyprland accepts per animation family; a number after popin/slidefade is a percentage.
 ANIMATION_STYLES = {
@@ -166,8 +169,11 @@ class ListsPages:
 				row.add_suffix(button("Undo", lambda key=key: (self.pending.drop(key), self.changed(True))))
 				group.add(row)
 
-	def value_widget(self, call, path, current, type_hint=""):
-		"""An editor for one literal field; None if it isn't a plain literal."""
+	def value_widget(self, call, path, current, type_hint="", editor=None):
+		"""An editor for one literal field; None if it isn't a plain literal.
+
+		editor is an optional (min, max) for numbers or a list of values offered in a menu for text.
+		"""
 		pending = self.pending.pending_field(call, path)
 		value = current.value if pending is None or pending is RESET else pending
 		on = lambda v: (self.pending.field(call, path, v), self.changed())  # noqa: E731
@@ -176,10 +182,13 @@ class ListsPages:
 			w.connect("notify::active", lambda s, _p: on(s.get_active()))
 		elif isinstance(value, (int, float)):
 			is_int = isinstance(value, int) and "number" not in type_hint
-			w = Gtk.SpinButton(adjustment=Gtk.Adjustment(lower=-1e6, upper=1e6, step_increment=1 if is_int else 0.05,
+			lo, hi = editor if isinstance(editor, tuple) else (-1e6, 1e6)
+			w = Gtk.SpinButton(adjustment=Gtk.Adjustment(lower=lo, upper=hi, step_increment=1 if is_int else 0.05,
 				page_increment=10), digits=0 if is_int else decimals(value), valign=Gtk.Align.CENTER, width_chars=9)
 			w.set_value(value)
 			w.connect("value-changed", lambda s: on(int(s.get_value()) if is_int else round(s.get_value(), 10)))
+		elif isinstance(value, str) and isinstance(editor, list):
+			w = choice_entry(value, editor, on)
 		elif isinstance(value, str):
 			w = Gtk.Entry(text=value, valign=Gtk.Align.CENTER, width_chars=24)
 			w.connect("changed", lambda e: on(e.get_text()))
@@ -204,8 +213,12 @@ class ListsPages:
 			self.changed()
 		return choice_entry(text, styles, on, placeholder="default")
 
-	def field_rows(self, parent, call, path, types=None, skip=(), title_prefix=""):
-		"""Rows for every field of the table at path, each with an editor and Remove."""
+	def field_rows(self, parent, call, path, types=None, skip=(), title_prefix="", editors=None):
+		"""Rows for every field of the table at path, each with an editor and Remove.
+
+		editors maps a key to the value_widget editor (range or menu) for that field.
+		"""
+		editors = editors or {}
 		types = types or {}
 		for key, site, current in self.lists.fields(call, path):
 			if key in skip:
@@ -219,7 +232,7 @@ class ListsPages:
 				row.add_suffix(button("Undo", lambda full=full: (self.pending.drop(("field", self.pending.call_key(call), full)),
 					self.changed(True))))
 			elif current.kind == "literal" and not call.nested:
-				widget = self.value_widget(call, full, current, types.get(key, ""))
+				widget = self.value_widget(call, full, current, types.get(key, ""), editors.get(key))
 				row.add_suffix(widget)
 				row.add_suffix(button("Remove", lambda full=full: (self.pending.field(call, full, RESET), self.changed(True))))
 			else:
@@ -598,29 +611,35 @@ class ListsPages:
 				gestures.add(self.deleted_row(title, call))
 				continue
 			row = self.call_expander(call, title, self.where(call))
-			self.field_rows(row, call, (0,), gtypes)
+			self.field_rows(row, call, (0,), gtypes, editors=GESTURE_EDITORS)
 			if not call.nested:
 				self.add_field_row(row, call, (0,), gtypes)
 			gestures.add(row)
 		self.added_rows(gestures, "gesture")
-		row = Adw.ActionRow(title="Add a gesture")
-		fingers = Gtk.SpinButton(adjustment=Gtk.Adjustment(lower=2, upper=5, step_increment=1, value=4),
-			valign=Gtk.Align.CENTER)
-		direction = Gtk.DropDown(model=Gtk.StringList.new(DIRECTIONS), valign=Gtk.Align.CENTER)
+		row = Adw.ExpanderRow(title="Add a gesture", subtitle="Same fields as the gestures above")
+		lo, hi = GESTURE_FINGERS
+		fingers = Gtk.SpinButton(adjustment=Gtk.Adjustment(lower=lo, upper=hi, step_increment=1, page_increment=10, value=4),
+			valign=Gtk.Align.CENTER, width_chars=9)
+		direction_box = choice_entry("", DIRECTIONS, lambda _t: None, placeholder="direction, e.g. horizontal")
 		action_box = choice_entry("", GESTURE_ACTIONS, lambda _t: None, placeholder="action, e.g. workspace")
-		action = action_box.entry
+		direction, action = direction_box.entry, action_box.entry
 
 		def add_gesture():
-			a = action.get_text().strip()
-			if not a:
-				action.add_css_class("error")
+			d, a = direction.get_text().strip(), action.get_text().strip()
+			for entry, text in ((direction, d), (action, a)):
+				entry.remove_css_class("error")
+				if not text:
+					entry.add_css_class("error")
+			if not d or not a:
 				return
-			n, d = int(fingers.get_value()), DIRECTIONS[direction.get_selected()]
+			n = int(fingers.get_value())
 			self.pending.add("gesture", f"hl.gesture({{ fingers = {n}, direction = {items.to_lua(d)}, action = {items.to_lua(a)} }})",
 				f"{n} {d} fingers → {a}")
 			self.changed(True)
-		for w in (fingers, direction, action_box):
-			row.add_suffix(w)
+		for key, w in (("fingers", fingers), ("direction", direction_box), ("action", action_box)):
+			field = Adw.ActionRow(title=key, subtitle=esc(gtypes.get(key, "")))
+			field.add_suffix(w)
+			row.add_row(field)
 		row.add_suffix(button("Add", add_gesture))
 		gestures.add(row)
 
