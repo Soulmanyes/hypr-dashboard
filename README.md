@@ -47,6 +47,11 @@ after moving it). Start it from inside a Hyprland session.
   applied", "can't apply: <reason>", or "reset to default on Apply" ("reset to
   <file:line> on Apply" when one of your files also sets it). After Reset, the
   row shows the value it will get.
+- "Rules for an open window…" (Window rules and Extra rules pages): pick a
+  running window to see which rules match it right now and jump to one, or
+  start a new Extra rule for it. Rules built in loops, or matching on things
+  the app can't check (workspace, modal), are listed under "Can't tell".
+  Regexes have to match the whole class or title, like in Hyprland.
 - Animation styles and gesture actions have a menu of the values Hyprland
   accepts; you can still type your own (`popin 70%`).
 - Text options that only take a few words (layout, accel profile, scroll

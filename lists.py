@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import hypr
 import items
 import luasrc
+import rules
 
 STUBS = "/usr/share/hypr/stubs/hl.meta.lua"
 RESET = items.RESET
@@ -141,6 +142,31 @@ class Lists:
 			if key == path[-1]:
 				return site, value
 		return None, Value()
+
+	def gaming_name(self, call, name):
+		"""Whether name is a local in call's file built from dashboard.gaming_apps (gamingApps)."""
+		return re.search(r"^\s*local\s+" + re.escape(name) + r"\s*=[^\n]*\.gaming_apps\b",
+			self.src(call).text, re.MULTILINE) is not None
+
+	def window_rule_matches(self, call, client, gaming_apps=()):
+		"""(answer, why) for whether a hand-written window rule matches a hyprctl client right
+		now: answer is True, False or None (can't tell, why says which field). A field set to
+		the gaming list's variable is checked against gaming_apps."""
+		if call.nested:
+			return None, "built in a loop or function"
+		match = self.fields(call, (0, "match"))
+		if not match:
+			return None, "no plain match table"
+		unsure = []
+		for key, site, value in match:
+			if not value.kind and self.gaming_name(call, site.text.strip()):
+				value = Value(rules.gaming_regex(gaming_apps), "literal") if gaming_apps else value
+			answer = rules.client_matches(key, value.value, client) if value.kind else None
+			if answer is False:
+				return False, ""
+			if answer is None:
+				unsure.append(key)
+		return (None, "can't check " + ", ".join(unsure)) if unsure else (True, "")
 
 	def exec_command(self, call):
 		"""(Arg for the command expression, Value) if the bind's action is hl.dsp.exec_cmd(...)."""

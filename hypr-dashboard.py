@@ -67,6 +67,8 @@ class Dashboard(Adw.ApplicationWindow):
 		self.items = ItemsPages(self.mark_changed)
 		self.lists = ListsPages(self.mark_changed)
 		self.items.after_rebuild = self.lists.after_rebuild = self.refilter
+		self.lists.on_open_window = lambda: self.pick_window(self.show_window_rules)
+		self.extra_rule_rows = []  # [(rule, row)] on the Extra rules page
 		pages = [
 			("options", "Options", "preferences-system-symbolic", self.options_page),
 			("monitors", "Monitors", "video-display-symbolic", self.items.monitors_page),
@@ -304,7 +306,7 @@ class Dashboard(Adw.ApplicationWindow):
 			description="Windows whose class matches one of these go to the gaming workspace "
 			"and render opaque without blur. Each entry is a regex.")
 		pick = Gtk.Button(label="Add from open window…", valign=Gtk.Align.CENTER)
-		pick.connect("clicked", lambda _b: self.pick_window(self.add_gaming_app))
+		pick.connect("clicked", lambda _b: self.pick_window(lambda c: self.add_gaming_app(c["class"])))
 		group.set_header_suffix(pick)
 
 		for i, app in enumerate(apps):
@@ -344,9 +346,14 @@ class Dashboard(Adw.ApplicationWindow):
 			title="Window rules",
 			description="Rules made in this app (kept in dashboard.lua). Your hand-written rules from "
 			"windowrules.lua are on the Window rules page.")
-		add = Gtk.Button(label="Add rule", valign=Gtk.Align.CENTER, css_classes=["suggested-action"])
+		add = Gtk.Button(label="Add rule", css_classes=["suggested-action"])
 		add.connect("clicked", self.on_add_rule)
-		group.set_header_suffix(add)
+		pick = Gtk.Button(label="Rules for an open window…")
+		pick.connect("clicked", lambda _b: self.pick_window(self.show_window_rules))
+		buttons = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+		buttons.append(pick)
+		buttons.append(add)
+		group.set_header_suffix(buttons)
 		groups = []
 		if not self.rules_hooked:
 			hook = Adw.PreferencesGroup(title="Not connected yet",
@@ -359,8 +366,11 @@ class Dashboard(Adw.ApplicationWindow):
 			groups.append(hook)
 		if not self.state["rules"]:
 			group.add(Adw.ActionRow(title="No rules yet", subtitle="Add one, then pick a window to match."))
+		self.extra_rule_rows = []
 		for rule in self.state["rules"]:
-			group.add(self.rule_row(rule))
+			row = self.rule_row(rule)
+			self.extra_rule_rows.append((rule, row))
+			group.add(row)
 		page.add(group)
 		return groups + [group]
 
@@ -400,7 +410,7 @@ class Dashboard(Adw.ApplicationWindow):
 				pick = Gtk.Button(icon_name="find-location-symbolic", tooltip_text="Pick an open window",
 					valign=Gtk.Align.CENTER, css_classes=["flat"])
 				pick.connect("clicked", lambda _b, e=entry: self.pick_window(
-					lambda cls, e=e: e.set_text("^(" + re.escape(cls) + ")$")))
+					lambda c, e=e: e.set_text("^(" + re.escape(c["class"]) + ")$")))
 				entry.add_suffix(pick)
 
 			def on_text(e, field=field):
@@ -500,7 +510,7 @@ class Dashboard(Adw.ApplicationWindow):
 				continue
 			row = Adw.ActionRow(title=GLib.markup_escape_text(client["class"]),
 				subtitle=GLib.markup_escape_text(client["title"]), activatable=True)
-			row.connect("activated", lambda _r, c=client: (dialog.close(), on_pick(c["class"])))
+			row.connect("activated", lambda _r, c=client: (dialog.close(), on_pick(c)))
 			listbox.append(row)
 		scroll = Gtk.ScrolledWindow(child=Adw.Clamp(child=listbox, margin_top=12, margin_bottom=12,
 			margin_start=12, margin_end=12), vexpand=True)
@@ -508,6 +518,66 @@ class Dashboard(Adw.ApplicationWindow):
 		view.add_top_bar(Adw.HeaderBar())
 		dialog.set_child(view)
 		dialog.present(self)
+
+	def show_window_rules(self, client):
+		"""The rules that match an open window right now, each with Edit, and New rule for it."""
+		dialog = Adw.Dialog(title=client["class"], content_width=560, content_height=560)
+		page = Adw.PreferencesPage()
+		found = Adw.PreferencesGroup(title="Rules that match it",
+			description=GLib.markup_escape_text(client["title"] or client["class"]))
+		unsure = Adw.PreferencesGroup(title="Can't tell",
+			description="Built in a loop, or matching on things the app can't check (a workspace, modal).")
+
+		def edit(name, row):
+			dialog.close()
+			row.set_expanded(True)
+			self.jump_to(name, row)
+
+		def add(group, title, subtitle, name, row, label="Edit"):
+			"""title is markup already (the rule rows' own titles)."""
+			r = Adw.ActionRow(title=title, subtitle=GLib.markup_escape_text(subtitle))
+			b = Gtk.Button(label=label, valign=Gtk.Align.CENTER, css_classes=["flat"])
+			b.connect("clicked", lambda _b: edit(name, row))
+			r.add_suffix(b)
+			group.add(r)
+
+		counts = {found: 0, unsure: 0}
+		for call, row in self.lists.windowrule_rows:
+			answer, why = self.lists.lists.window_rule_matches(call, client, self.state["gaming_apps"])
+			if answer is False:
+				continue
+			group = found if answer else unsure
+			add(group, row.get_title(), f"Window rules · {self.lists.where(call)}" + (f" · {why}" if why else ""),
+				"windowrules", row, "Show" if call.nested else "Edit")
+			counts[group] += 1
+		for rule, row in self.extra_rule_rows:
+			if rules.rule_matches(rule, client):
+				off = "" if rule.get("enabled", True) else " · switched off"
+				add(found, self.rule_summary(rule)[0], "Extra rules" + off, "rules", row)
+				counts[found] += 1
+		if not counts[found]:
+			found.add(Adw.ActionRow(title="No rule matches this window"))
+		new = Adw.ButtonRow(title="New rule for this window", start_icon_name="list-add-symbolic",
+			css_classes=["suggested-action"])
+		new.connect("activated", lambda _r: (dialog.close(), self.add_rule_for(client)))
+		found.add(new)
+		page.add(found)
+		if counts[unsure]:
+			page.add(unsure)
+		view = Adw.ToolbarView(content=page)
+		view.add_top_bar(Adw.HeaderBar())
+		dialog.set_child(view)
+		dialog.present(self)
+
+	def add_rule_for(self, client):
+		rule = rules.new_rule()
+		rule["name"] = client["class"]
+		rule["match"]["class"] = "^(" + re.escape(client["class"]) + ")$"
+		self.state["rules"].append(rule)
+		self.rebuild()
+		row = next(r for x, r in self.extra_rule_rows if x is rule)
+		row.set_expanded(True)
+		self.jump_to("rules", row)
 
 	# Apply -------------------------------------------------------------------
 

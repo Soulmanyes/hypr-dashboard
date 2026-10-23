@@ -116,11 +116,12 @@ def regex_error(pattern):
 
 
 def field_matches(pattern, value):
+	"""Hyprland's regex match engine needs the whole value to match (RE2::FullMatch)."""
 	if not pattern:
 		return True
 	negative = pattern.startswith("negative:")
 	try:
-		found = re.search(pattern.removeprefix("negative:"), value or "") is not None
+		found = re.fullmatch(pattern.removeprefix("negative:"), value or "") is not None
 	except re.error:
 		return False
 	return found != negative
@@ -133,6 +134,33 @@ def rule_matches(rule, client):
 	if not any(rule["match"].values()):
 		return False
 	return all(field_matches(p, client.get(CLIENT_KEYS[k], "")) for k, p in rule["match"].items())
+
+
+def client_matches(key, value, client):
+	"""Whether one hand-written match field fits a hyprctl client: True, False, or None when
+	the app can't tell (workspace selectors, modal, unknown keys or value types)."""
+	if key in CLIENT_KEYS or key == "xdg_tag":
+		if not isinstance(value, str):
+			return None
+		return field_matches(value, client.get(CLIENT_KEYS.get(key, "xdgTag"), ""))
+	if key == "tag" and isinstance(value, str):
+		tags = [t.rstrip("*") for t in client.get("tags", [])]
+		return (value.removeprefix("negative:") in tags) != value.startswith("negative:")
+	if key == "content" and isinstance(value, (str, int)) and not isinstance(value, bool):
+		names = ["none", "photo", "video", "game"]
+		have = client.get("contentType", "none")
+		return str(value) == have or (isinstance(value, int) and value < len(names) and names[value] == have)
+	states = {
+		"float": client.get("floating"),
+		"xwayland": client.get("xwayland"),
+		"pin": client.get("pinned"),
+		"fullscreen": bool(client.get("fullscreen")),
+		"group": bool(client.get("grouped")),
+		"focus": client.get("focusHistoryID") == 0,
+	}
+	if key in states and isinstance(value, bool) and states[key] is not None:
+		return states[key] == value
+	return None
 
 
 def gaming_regex(apps):

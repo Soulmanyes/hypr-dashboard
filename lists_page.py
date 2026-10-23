@@ -120,6 +120,8 @@ class ListsPages:
 		self.input_page = Adw.PreferencesPage()
 		self.groups = {}
 		self.after_rebuild = lambda: None  # the window sets this to re-apply page searches
+		self.on_open_window = None  # the window sets this: "Rules for an open window…"
+		self.windowrule_rows = []  # [(call, row)] on the Window rules page, for jumping to a rule
 		self.lists = None
 		self.pending = None
 		self.monitors = []
@@ -427,6 +429,9 @@ class ListsPages:
 		group = Adw.PreferencesGroup(title="Your window rules",
 			description="The hand-written rules in windowrules.lua, in the order Hyprland applies them. "
 			"Rules built in loops are read-only. Add new rules on the Extra rules page.")
+		if self.on_open_window:
+			group.set_header_suffix(button("Rules for an open window…", self.on_open_window, css=()))
+		self.windowrule_rows = []
 		for call in self.lists.window_rules:
 			fields = {k: (s, v) for k, s, v in self.lists.fields(call)}
 			name = fields.get("name", (None, lists.Value()))[1]
@@ -447,6 +452,7 @@ class ListsPages:
 					self.add_field_row(row, call, (0, "match"), keys=MATCH_KEYS, title="Add a match")
 				self.field_rows(row, call, (0,), skip=("match",))
 				self.add_field_row(row, call, (0,), title="Add an effect (e.g. float = true)")
+			self.windowrule_rows.append((call, row))
 			group.add(row)
 		return [group]
 
