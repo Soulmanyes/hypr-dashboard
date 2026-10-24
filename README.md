@@ -31,6 +31,15 @@ them (comments, layout, order) exactly as it was.
 
 ## Install
 
+Needs git.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Soulmanyes/hypr-dashboard/main/install.sh | bash
+```
+
+This clones the app to `~/hypr-dashboard` and adds "Hyprland Dashboard" to your
+launcher. Or do the same by hand:
+
 ```sh
 git clone https://github.com/Soulmanyes/hypr-dashboard ~/hypr-dashboard
 ~/hypr-dashboard/install.sh                # adds "Hyprland Dashboard" to your launcher
@@ -41,14 +50,16 @@ after moving it). Start it from inside a Hyprland session.
 
 ## Update
 
+Run the install command again:
+
 ```sh
-dir=$(sed -n 's|^Exec=python3 "\(.*\)/hypr-dashboard.py"$|\1|p' ~/.local/share/applications/dev.hyprdashboard.HyprDashboard.desktop) && git -C "${dir:?run install.sh first}" pull
+curl -fsSL https://raw.githubusercontent.com/Soulmanyes/hypr-dashboard/main/install.sh | bash
 ```
 
-This finds the app folder from the launcher entry `install.sh` made, so it
-works from any folder and wherever you cloned the app. Then close and reopen
-the app. You don't need to run `install.sh` again. On the first launch after
-an update, the app backs up `~/.config/hypr` again.
+It finds the app folder from the launcher entry `install.sh` made, so it
+works from any folder and wherever you cloned the app, and runs `git pull`
+there. Then close and reopen the app. On the first launch after an update,
+the app backs up `~/.config/hypr` again.
 
 ## While you edit
 
