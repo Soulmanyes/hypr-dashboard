@@ -10,6 +10,8 @@ that setting on its page and briefly highlights it.
 It edits your own hand-written files in place and keeps everything else in
 them (comments, layout, order) exactly as it was.
 
+![Hyprland Dashboard on its Options page, with the general options](docs/screenshot.png)
+
 > [!WARNING]
 > **Use at your own risk.** This app rewrites your Hyprland config and reloads
 > Hyprland. A bad change can leave you with a broken desktop, a black screen or
