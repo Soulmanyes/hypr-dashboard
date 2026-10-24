@@ -16,6 +16,7 @@ import hypr
 import items
 import luasrc
 import rules
+import workspaces
 
 STUBS = "/usr/share/hypr/stubs/hl.meta.lua"
 RESET = items.RESET
@@ -233,6 +234,8 @@ class Pending:
 	def __init__(self, lists):
 		self.lists = lists
 		self.ops = {}
+		self.specs = {}  # fields of calls added this session that stay editable, by add key
+		self.next_add = 0
 
 	def __bool__(self):
 		return bool(self.ops)
@@ -273,8 +276,9 @@ class Pending:
 		op = self.ops.get(("span", self.call_key(call), start))
 		return op[4] if op else None
 
-	def add(self, fn, text, label):
-		self.ops[("add", fn, text)] = ("add", fn, text, label)
+	def add(self, fn, text, label, key=None):
+		"""Queues a new call; give a key to edit it before Apply (add again with the same key)."""
+		self.ops[("add", fn, text if key is None else key)] = ("add", fn, text, label)
 
 	def delete(self, call):
 		self.ops[("delete", self.call_key(call))] = ("delete", call)
@@ -302,6 +306,9 @@ class Pending:
 				continue
 			call = op[1]
 			what = items.call_label(call)
+			if call.fn == "workspace_rule":
+				_s, ws = self.lists.field(call, (0, "workspace"))
+				what = f"Workspace rule for {workspaces.describe(ws.value)}" if ws.kind else what
 			if kind == "delete":
 				lines.append((what, "remove"))
 			elif self.call_key(call) in deleted:

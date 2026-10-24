@@ -4,6 +4,7 @@ Built from a lists.Lists; edits go into a lists.Pending that the window's
 Apply writes together with everything else.
 """
 import re
+import subprocess
 
 import gi
 
@@ -11,8 +12,11 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+import hypr  # noqa: E402
 import items  # noqa: E402
 import lists  # noqa: E402
+import luasrc  # noqa: E402
+import workspaces  # noqa: E402
 
 RESET = lists.RESET
 MATCH_KEYS = ["class", "title", "initial_class", "initial_title", "tag", "xwayland", "float", "fullscreen",
@@ -30,6 +34,16 @@ ANIMATION_STYLES = {
 	"workspaces": ["slide", "slidevert", "fade", "slidefade", "slidefade 20%", "slidefadevert", "slidefadevert 20%"],
 	"borderangle": ["once", "loop"],
 }
+WS_FIELD = {"workspace": "workspace"}
+# Shown on every workspace rule, set or not, in this order.
+WS_COMMON = ("default_name", "monitor", "default", "persistent")
+WS_RULE_TITLES = {"workspace": "Workspace number", "default_name": "Label in your bar (default_name)",
+	"monitor": "Monitor (monitor)", "default": "Opens first on its monitor (default)",
+	"persistent": "Kept even when empty (persistent)"}
+WS_RULE_NOTES = {"default_name": "Only cosmetic: shown instead of the number. Set when the workspace is created; "
+	"relabel an open one under Open workspaces",
+	"monitor": "A port name (DP-1) or desc:… (survives port changes)",
+	"default": "The workspace its monitor shows first", "persistent": "Stays even with no windows on it"}
 SECTION = re.compile(r"^-{3,}\s*([^-].*?)\s*-{3,}\s*$")
 NOTE = re.compile(r"^--\s+(\S.*)$")
 
@@ -100,6 +114,81 @@ def choice_entry(text, choices, on_change, placeholder=""):
 	return box
 
 
+HAND_WRITTEN = "Written by hand in your config, and kept as it is. Rules made in the app pick a workspace by number."
+
+
+def workspace_editor(text, on_change, choices=(), names=None, allow_none=False, show_label=True):
+	"""A workspace number box, with the label the bar shows for that number beside it.
+
+	on_change gets the workspace string ("7", "" for none when allow_none) while it is valid;
+	box.current() gives that string, or None when the box holds something invalid. A
+	hand-written target that isn't a number ("name:web", "r[1-5]") is shown, not edited.
+	"""
+	kind, value, suffix = workspaces.split(text) if text else ("id", "", "")
+	box = Gtk.Box(spacing=8, valign=Gtk.Align.CENTER)
+	if text and kind != "id":
+		box.append(Gtk.Label(label=workspaces.describe(text), css_classes=["dim-label"], tooltip_text=HAND_WRITTEN,
+			ellipsize=3, max_width_chars=40))
+		box.entry = None
+		box.current = lambda: text
+		return box
+	shown = Gtk.Label(css_classes=["dim-label"], ellipsize=3, max_width_chars=24)
+	entry = Gtk.Entry(text=value, placeholder_text="none" if allow_none else "number", width_chars=8,
+		input_purpose=Gtk.InputPurpose.DIGITS, valign=Gtk.Align.CENTER)
+	linked = Gtk.Box(css_classes=["linked"], valign=Gtk.Align.CENTER)
+	linked.append(entry)
+	box.append(shown)
+	box.append(linked)
+	box.entry = entry
+
+	def current():
+		number = entry.get_text().strip()
+		if not number:
+			return "" if allow_none else None
+		return number + suffix if workspaces.valid("id", number) else None
+	box.current = current
+
+	def show():
+		number = entry.get_text().strip()
+		bad = current() is None and bool(number)
+		if bad:
+			entry.add_css_class("error")
+		else:
+			entry.remove_css_class("error")
+		entry.set_tooltip_text("A workspace number is a whole number, 1 or more" if bad else None)
+		label = (names or {}).get(number)
+		shown.set_text(f"label “{label}”" if show_label and label and not bad else "")
+
+	def update(*_):
+		show()
+		if current() is not None:
+			on_change(current())
+	show()
+	entry.connect("changed", update)
+	if choices:
+		listbox = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["menu"])
+		for choice in choices:
+			listbox.append(Gtk.Label(label=workspaces.describe(choice, names), xalign=0, margin_start=6, margin_end=6,
+				margin_top=4, margin_bottom=4))
+		popover = Gtk.Popover(child=Gtk.ScrolledWindow(child=listbox, propagate_natural_height=True,
+			max_content_height=320, hscrollbar_policy=Gtk.PolicyType.NEVER))
+
+		def pick(_box, row):
+			popover.popdown()
+			entry.set_text(choices[row.get_index()])
+		listbox.connect("row-activated", pick)
+		linked.append(Gtk.MenuButton(icon_name="pan-down-symbolic", popover=popover, valign=Gtk.Align.CENTER,
+			tooltip_text="Pick a workspace that's open or has a rule"))
+	return box
+
+
+def ws_rule_text(spec):
+	"""hl.workspace_rule(...) for a new rule: {"workspace": "7", "monitor": ..., "default_name": ...}."""
+	fields = ", ".join(f"{k} = {items.to_lua(spec[k])}" for k in ("workspace", "monitor", "default_name", "default",
+		"persistent") if spec.get(k))
+	return f"hl.workspace_rule({{ {fields} }})"
+
+
 def decimals(value):
 	"""Enough digits to show a float from the file exactly (15.8273644 needs 7)."""
 	text = repr(float(value))
@@ -128,6 +217,8 @@ class ListsPages:
 		self.lists = None
 		self.pending = None
 		self.monitors = []
+		self.ws_names = {}  # {"999": "gaming"}, for labels
+		self.ws_choices = []  # workspace strings offered in menus
 
 	def load(self, model):
 		self.lists = lists.Lists(model)
@@ -141,6 +232,8 @@ class ListsPages:
 		self.on_change()
 
 	def rebuild(self):
+		self.ws_names = workspaces.live_names()
+		self.ws_choices = workspaces.known()
 		for page, build in ((self.workspaces_page, self.build_workspaces), (self.binds_page, self.build_binds),
 				(self.windowrules_page, self.build_windowrules), (self.animations_page, self.build_animations),
 				(self.input_page, self.build_input)):
@@ -172,7 +265,8 @@ class ListsPages:
 	def value_widget(self, call, path, current, type_hint="", editor=None):
 		"""An editor for one literal field; None if it isn't a plain literal.
 
-		editor is an optional (min, max) for numbers or a list of values offered in a menu for text.
+		editor is an optional (min, max) for numbers, a list of values offered in a menu for text,
+		or "workspace" for a workspace string (ID number or name:NAME).
 		"""
 		pending = self.pending.pending_field(call, path)
 		value = current.value if pending is None or pending is RESET else pending
@@ -187,6 +281,8 @@ class ListsPages:
 				page_increment=10), digits=0 if is_int else decimals(value), valign=Gtk.Align.CENTER, width_chars=9)
 			w.set_value(value)
 			w.connect("value-changed", lambda s: on(int(s.get_value()) if is_int else round(s.get_value(), 10)))
+		elif isinstance(value, str) and editor == "workspace":
+			w = workspace_editor(value, on, self.ws_choices, self.ws_names)
 		elif isinstance(value, str) and isinstance(editor, list):
 			w = choice_entry(value, editor, on)
 		elif isinstance(value, str):
@@ -213,19 +309,24 @@ class ListsPages:
 			self.changed()
 		return choice_entry(text, styles, on, placeholder="default")
 
-	def field_rows(self, parent, call, path, types=None, skip=(), title_prefix="", editors=None):
+	def field_rows(self, parent, call, path, types=None, skip=(), title_prefix="", editors=None, titles=None,
+			notes=None, only=None):
 		"""Rows for every field of the table at path, each with an editor and Remove.
 
-		editors maps a key to the value_widget editor (range or menu) for that field.
+		editors maps a key to the value_widget editor (range, menu or "workspace") for that field;
+		titles and notes replace a key's title and its subtitle (the stub type); only limits the rows
+		to those keys.
 		"""
 		editors = editors or {}
 		types = types or {}
+		titles = titles or {}
+		notes = notes or {}
 		for key, site, current in self.lists.fields(call, path):
-			if key in skip:
+			if key in skip or (only is not None and key not in only):
 				continue
 			full = path + (key,)
 			removed = self.pending.pending_field(call, full) is RESET
-			row = Adw.ActionRow(title=esc(title_prefix + key), subtitle=esc(types.get(key, "")))
+			row = Adw.ActionRow(title=esc(titles.get(key, title_prefix + key)), subtitle=esc(notes.get(key, types.get(key, ""))))
 			if removed:
 				row.set_subtitle("removed on Apply")
 				row.add_css_class("dim-label")
@@ -236,14 +337,19 @@ class ListsPages:
 				row.add_suffix(widget)
 				row.add_suffix(button("Remove", lambda full=full: (self.pending.field(call, full, RESET), self.changed(True))))
 			else:
-				row.add_suffix(Gtk.Label(label=short(site.text, 50), css_classes=["dim-label"], valign=Gtk.Align.CENTER,
+				shown = site.text if current.kind in ("", "literal") else f"{site.text} = {short(current.value, 40)}"
+				row.add_suffix(Gtk.Label(label=short(shown, 60), css_classes=["dim-label"], valign=Gtk.Align.CENTER,
 					ellipsize=3, max_width_chars=40))
 				lock(row, "computed or a table; edit it by hand")
+			if editors.get(key) == "workspace" and current.kind and not removed:
+				row.set_subtitle(esc(workspaces.describe(current.value, self.ws_names)))
 			parent.add_row(row)
 		for key, op in self.pending.ops.items():
 			if op[0] == "field" and op[1] is call and op[2][:-1] == path and op[3] is not RESET \
-					and self.lists.field(call, op[2])[0] is None:
-				row = Adw.ActionRow(title=esc(title_prefix + op[2][-1]), subtitle=esc(f"= {op[3]!r} · added on Apply"))
+					and self.lists.field(call, op[2])[0] is None and op[2][-1] not in skip \
+					and (only is None or op[2][-1] in only):
+				row = Adw.ActionRow(title=esc(titles.get(op[2][-1], title_prefix + op[2][-1])),
+					subtitle=esc(f"= {op[3]!r} · added on Apply"))
 				row.add_suffix(button("Undo", lambda key=key: (self.pending.drop(key), self.changed(True))))
 				parent.add_row(row)
 
@@ -284,39 +390,256 @@ class ListsPages:
 
 	# Workspaces --------------------------------------------------------------
 
+	def ws_rule_title(self, call):
+		"""'Workspace ID 999 · named “gaming”', from pending values where there are any."""
+		def value(key):
+			pending = self.pending.pending_field(call, (0, key))
+			_s, cur = self.lists.field(call, (0, key))
+			return pending if isinstance(pending, str) else cur.value if cur.kind else ""
+		ws = value("workspace")
+		return workspaces.describe(ws, {ws: value("default_name")}) if ws else "Workspace ?"
+
+	def monitor_values(self):
+		return [f"desc:{m.live['description']}" for m in self.monitors] + [m.output for m in self.monitors]
+
 	def build_workspaces(self):
 		types = self.lists.types["workspace_rule"]
+		monitors = self.monitor_values()
 		group = Adw.PreferencesGroup(title="Workspace rules",
-			description="Which monitor a workspace lives on, and per-workspace looks.")
+			description="Every workspace has a number. Rules and keybinds (Super+1) find a workspace by its "
+			"number, so it keeps working whatever the workspace is called. A label is only cosmetic: the text "
+			"your bar shows instead of the number.")
 		for call in self.lists.workspace_rules:
-			_s, ws = self.lists.field(call, (0, "workspace"))
-			name = ws.value if ws.kind else "?"
+			ws_site, ws = self.lists.field(call, (0, "workspace"))
+			title = self.ws_rule_title(call)
 			if self.pending.deleted(call):
-				group.add(self.deleted_row(f"Workspace {name}", call))
+				group.add(self.deleted_row(title, call))
 				continue
-			bits = [f"{k} = {short(s.text, 30)}" for k, s, _v in self.lists.fields(call) if k != "workspace"]
-			row = self.call_expander(call, f"Workspace {name}", f"{', '.join(bits)} · {self.where(call)}")
-			self.field_rows(row, call, (0,), types)
-			if not call.nested:
-				self.add_field_row(row, call, (0,), types)
+			row = self.call_expander(call, title, self.ws_rule_summary(call))
+			editors = {"monitor": monitors, "workspace": "workspace"}
+			if call.nested:
+				self.field_rows(row, call, (0,), types, editors=editors, titles=WS_RULE_TITLES, notes=WS_RULE_NOTES)
+				group.add(row)
+				continue
+			# The same rows for every rule, set or not, in the same order; the rest below.
+			present = {k for k, _s, _v in self.lists.fields(call)}
+			if ws.kind == "literal":
+				row.add_row(self.ws_rule_workspace_row(call, row, ws))
+			else:
+				self.field_rows(row, call, (0,), types, editors=editors, titles=WS_RULE_TITLES, only=("workspace",))
+			for key in WS_COMMON:
+				site, current = self.lists.field(call, (0, key))
+				if site is None or current.kind == "literal":
+					row.add_row(self.ws_field_row(call, key, current if site else None, monitors, row))
+				else:
+					self.field_rows(row, call, (0,), types, editors=editors, titles=WS_RULE_TITLES, notes=WS_RULE_NOTES,
+						only=(key,))
+			self.field_rows(row, call, (0,), types, skip=("workspace",) + WS_COMMON, editors=editors,
+				titles=WS_RULE_TITLES, notes=WS_RULE_NOTES)
+			self.add_field_row(row, call, (0,), types, keys=[k for k in types if k not in WS_COMMON + ("workspace",)],
+				title="Add another field")
 			group.add(row)
-		self.added_rows(group, "workspace_rule")
-		add = Adw.EntryRow(title="Add a rule for workspace (id or name)", show_apply_button=True)
+		for key, op in self.pending.ops.items():
+			if op[0] == "add" and op[1] == "workspace_rule":
+				group.add(self.new_ws_rule_row(key, monitors))
+		group.add(self.add_ws_rule_row())
+		return [group, self.open_workspaces_group(), self.monitor_names_group()]
 
-		def add_rule(e):
-			ws = e.get_text().strip()
-			if ws:
-				self.pending.add("workspace_rule", f"hl.workspace_rule({{ workspace = {items.to_lua(ws)} }})",
-					f"Workspace {ws}")
-				self.changed(True)
-		add.connect("apply", add_rule)
-		group.add(add)
+	def ws_rule_summary(self, call):
+		"""The same facts for every rule: 'monitor DP-1 · opens first · kept when empty · file:line'."""
+		values = {k: (s, v) for k, s, v in self.lists.fields(call)}
+
+		def value(key):
+			site, v = values.get(key, (None, lists.Value()))
+			return v.value if v.kind else site.text if site else None
+		monitor = value("monitor")
+		port = next((m.output for m in self.monitors if isinstance(monitor, str) and monitor.startswith("desc:")
+			and m.live["description"].startswith(monitor[5:].strip())), None)
+		parts = [f"monitor {port or short(monitor, 30)}" if monitor else "any monitor",
+			"opens first" if value("default") is True else None,
+			"kept when empty" if value("persistent") is True else None]
+		extra = [k for k in values if k not in WS_COMMON + ("workspace",)]
+		if extra:
+			parts.append("also " + ", ".join(extra))
+		return " · ".join(p for p in parts + [self.where(call)] if p)
+
+	def ws_field_row(self, call, key, current, monitors, expander):
+		"""One of the fields every rule shows, set or not. Empty text or a switch turned off
+		removes the field (Hyprland's default); filling one in adds it on Apply."""
+		path = (0, key)
+		pending = self.pending.pending_field(call, path)
+		if pending is None and current is not None:
+			pending = current.value
+		elif pending is RESET:
+			pending = None
+		row = Adw.ActionRow(title=esc(WS_RULE_TITLES[key]), subtitle=esc(WS_RULE_NOTES[key]))
+
+		def set_value(value):
+			if value == "" or (value is False and current is None):
+				self.pending.field(call, path, RESET)  # dropped when the rule doesn't set it
+			else:
+				self.pending.field(call, path, value)  # a switch the file sets stays written, as false
+			expander.set_title(esc(self.ws_rule_title(call)))
+			self.changed()
+		if key in ("default", "persistent"):
+			widget = Gtk.Switch(active=pending is True, valign=Gtk.Align.CENTER)
+			widget.connect("notify::active", lambda s, _p: set_value(s.get_active()))
+		elif key == "monitor":
+			widget = choice_entry(pending if isinstance(pending, str) else "", monitors, lambda t: set_value(t.strip()),
+				placeholder="any monitor")
+		else:
+			widget = Gtk.Entry(text=pending if isinstance(pending, str) else "", placeholder_text="none",
+				valign=Gtk.Align.CENTER, width_chars=16)
+			widget.connect("changed", lambda e: set_value(e.get_text().strip()))
+		row.add_suffix(widget)
+		return row
+
+	def ws_rule_workspace_row(self, call, expander, ws):
+		pending = self.pending.pending_field(call, (0, "workspace"))
+
+		def on(text):
+			self.pending.field(call, (0, "workspace"), text)
+			expander.set_title(esc(self.ws_rule_title(call)))
+			self.changed()
+		row = Adw.ActionRow(title=WS_RULE_TITLES["workspace"], subtitle="The workspace this rule is for")
+		row.add_suffix(workspace_editor(pending if isinstance(pending, str) else ws.value, on,
+			self.ws_choices, self.ws_names, show_label=False))
+		return row
+
+	def add_ws_rule_row(self):
+		row = Adw.ActionRow(title="Add a rule for workspace number", subtitle="Set its label and monitor after adding")
+		editor = workspace_editor("", lambda _t: None, self.ws_choices, self.ws_names)
+
+		def add():
+			ws = editor.current()
+			if not ws:
+				editor.entry.add_css_class("error")
+				return
+			self.pending.next_add += 1
+			key = ("workspace_rule", self.pending.next_add)
+			self.pending.specs[key] = {"workspace": ws}
+			self.pending.add("workspace_rule", ws_rule_text(self.pending.specs[key]), workspaces.describe(ws), key=key)
+			self.changed(True)
+		editor.entry.connect("activate", lambda _e: add())
+		row.add_suffix(editor)
+		row.add_suffix(button("Add", add))
+		return row
+
+	def new_ws_rule_row(self, key, monitors):
+		"""A rule added in this session: its workspace, name and monitor stay editable until Apply."""
+		spec = self.pending.specs[key[2]]
+		row = Adw.ExpanderRow(title=esc(self.new_ws_rule_title(spec)), subtitle="added on Apply")
+		row.add_suffix(button("Undo", lambda: (self.pending.drop(key), self.changed(True))))
+
+		def changed():
+			title = self.new_ws_rule_title(spec)
+			self.pending.add("workspace_rule", ws_rule_text(spec), title, key=key[2])
+			row.set_title(esc(title))
+			self.changed()
+
+		def set_field(field, value):
+			if value.strip():
+				spec[field] = value.strip()
+			else:
+				spec.pop(field, None)
+			changed()
+		which = Adw.ActionRow(title=WS_RULE_TITLES["workspace"], subtitle="The workspace this rule is for")
+		which.add_suffix(workspace_editor(spec["workspace"], lambda t: set_field("workspace", t),
+			self.ws_choices, self.ws_names, show_label=False))
+		row.add_row(which)
+		name = Adw.ActionRow(title=WS_RULE_TITLES["default_name"], subtitle=WS_RULE_NOTES["default_name"])
+		name_entry = Gtk.Entry(text=spec.get("default_name", ""), placeholder_text="none", valign=Gtk.Align.CENTER,
+			width_chars=16)
+		name_entry.connect("changed", lambda e: set_field("default_name", e.get_text()))
+		name.add_suffix(name_entry)
+		row.add_row(name)
+		monitor = Adw.ActionRow(title=WS_RULE_TITLES["monitor"], subtitle=WS_RULE_NOTES["monitor"])
+		monitor.add_suffix(choice_entry(spec.get("monitor", ""), monitors, lambda t: set_field("monitor", t),
+			placeholder="any"))
+		row.add_row(monitor)
+		for flag in ("default", "persistent"):
+			flag_row = Adw.ActionRow(title=WS_RULE_TITLES[flag], subtitle=WS_RULE_NOTES[flag])
+			switch = Gtk.Switch(active=bool(spec.get(flag)), valign=Gtk.Align.CENTER)
+			switch.connect("notify::active", lambda s, _p, flag=flag: (spec.__setitem__(flag, True) if s.get_active()
+				else spec.pop(flag, None), changed()))
+			flag_row.add_suffix(switch)
+			row.add_row(flag_row)
+		row.add_row(Adw.ActionRow(title="More fields", subtitle="Gaps, borders, layout and the rest after Apply",
+			css_classes=["dim-label"]))
+		return row
+
+	@staticmethod
+	def new_ws_rule_title(spec):
+		return workspaces.describe(spec["workspace"], {spec["workspace"]: spec.get("default_name")})
+
+	def open_workspaces_group(self):
+		group = Adw.PreferencesGroup(title="Open workspaces",
+			description="Change the label or number of a workspace that is open right now. This happens at "
+			"once and is not saved: when the workspace is made again it gets the label from its rule above.")
+		try:
+			live = sorted(hypr.hyprctl_json("workspaces"), key=lambda w: (w["id"] < 0, w["id"]))
+		except Exception:  # noqa: BLE001 - Hyprland not answering
+			live = []
+		for ws in live:
+			if ws["name"].startswith("special"):
+				continue
+			numbered = ws["id"] > 0
+			selector = str(ws["id"]) if numbered else "name:" + ws["name"]
+			labelled = not numbered or ws["name"] != str(ws["id"])
+			title = f"Workspace {ws['id']}" if numbered else f"Workspace labelled “{ws['name']}” (no number)"
+			windows = f"{ws['windows']} window{'s' if ws['windows'] != 1 else ''}"
+			label_text = f"label “{ws['name']}”" if numbered and labelled else "no label" if numbered else ""
+			row = Adw.ExpanderRow(title=esc(title), subtitle=esc(" · ".join(x for x in (label_text, ws["monitor"], windows) if x)))
+			name_row = Adw.ActionRow(title="Label in your bar",
+				subtitle="Leave empty to show just the number" if numbered else "Only cosmetic")
+			name_entry = Gtk.Entry(text=ws["name"] if labelled else "", placeholder_text=str(ws["id"]) if numbered else "",
+				valign=Gtk.Align.CENTER, width_chars=16)
+			name_row.add_suffix(name_entry)
+			name_row.add_suffix(button("Set label now", lambda e=name_entry, r=name_row, sel=selector, n=numbered, i=ws["id"]:
+				self.rename_workspace(sel, e.get_text().strip() or (str(i) if n else ""), r)))
+			row.add_row(name_row)
+			if numbered:
+				id_row = Adw.ActionRow(title="Number",
+					subtitle="Must be free. Rules and keybinds for the old number won't reach it any more")
+				spin = Gtk.SpinButton(adjustment=Gtk.Adjustment(lower=1, upper=2147483647, step_increment=1,
+					page_increment=10), valign=Gtk.Align.CENTER, width_chars=9)
+				spin.set_value(ws["id"])
+				id_row.add_suffix(spin)
+				id_row.add_suffix(button("Change number now", lambda s=spin, r=id_row, sel=selector:
+					self.change_workspace_id(sel, int(s.get_value()), r)))
+				row.add_row(id_row)
+			group.add(row)
+		return group
+
+	def run_dispatch(self, expr, row):
+		"""Runs one hl.dsp call; a refusal shows on the row, success rebuilds the pages."""
+		out = subprocess.run(["hyprctl", "dispatch", expr], capture_output=True, text=True, timeout=5)
+		text = (out.stdout + out.stderr).strip()
+		if out.returncode != 0 or text != "ok":
+			reason = text.rsplit(": ", 1)[-1] if text else f"exit code {out.returncode}"  # drop "warning: =[C]:-1: "
+			row.set_subtitle(esc(f"Hyprland said: {reason}"))
+			row.add_css_class("error")
+			return
+		self.rebuild()
+
+	def rename_workspace(self, selector, name, row):
+		if not name:
+			row.add_css_class("error")
+			return
+		self.run_dispatch(f"hl.dsp.workspace.rename({{ workspace = {luasrc.lua_string(selector)}, "
+			f"name = {luasrc.lua_string(name)} }})", row)
+
+	def change_workspace_id(self, selector, new_id, row):
+		self.run_dispatch(f"hl.dsp.workspace.change_id({{ workspace = {luasrc.lua_string(selector)}, id = {new_id} }})",
+			row)
+
+	def monitor_names_group(self):
 		monitors = Adw.PreferencesGroup(title="Monitor names for rules",
 			description="Use these as monitor values; desc: names survive port changes.")
 		for m in self.monitors:
 			monitors.add(Adw.ActionRow(title=esc(f"desc:{m.live['description']}"), subtitle=esc(m.output),
 				css_classes=["property"]))
-		return [group, monitors]
+		return monitors
 
 	# Keybinds ----------------------------------------------------------------
 
@@ -460,10 +783,11 @@ class ListsPages:
 			if call.nested:
 				row.add_row(Adw.ActionRow(title=esc(short(call.args[0].text if call.args else "", 90)), title_lines=3))
 			else:
-				self.field_rows(row, call, (0, "match"), title_prefix="match ")
+				self.field_rows(row, call, (0, "match"), title_prefix="match ", editors=WS_FIELD)
 				if self.lists.table(call, (0, "match")) is not None:
 					self.add_field_row(row, call, (0, "match"), keys=MATCH_KEYS, title="Add a match")
-				self.field_rows(row, call, (0,), skip=("match",))
+				self.field_rows(row, call, (0,), skip=("match",), editors={**WS_FIELD, "monitor": self.monitor_values()},
+					notes={"monitor": WS_RULE_NOTES["monitor"]})
 				self.add_field_row(row, call, (0,), title="Add an effect (e.g. float = true)")
 			self.windowrule_rows.append((call, row))
 			group.add(row)

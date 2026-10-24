@@ -90,6 +90,21 @@ the app backs up `~/.config/hypr` again.
 - Nested options are titled with their group ("groupbar height", "blur
   passes"), with Hyprland's description underneath.
 - Apply and Refresh keep each page scrolled where it was.
+- Workspaces are always picked by **number** (the one Super+1 uses), so
+  rules keep working whatever a workspace is called. A **label** is only
+  cosmetic: the text your bar shows instead of the number (`default_name` in
+  a workspace rule). Rows read "Workspace 999 · label “gaming”". Targets you
+  wrote by hand another way (`name:web`, `r[1-5]`) are shown and left alone.
+- Every workspace rule shows the same fields in the same order: number,
+  label, monitor, "opens first" and "kept when empty". Ones the rule doesn't
+  set are empty or off; filling one in adds it, clearing it removes it. Other
+  fields (gaps, borders, layout) are under "Add another field".
+- A workspace rule you just added stays editable until Apply, and an
+  existing rule can be moved to another number.
+- A rule's label is only given when Hyprland creates the workspace. To change
+  the label or number of a workspace that's open now, use **Open
+  workspaces** on the Workspaces page; that happens at once and isn't saved
+  in your config.
 
 ## Before you start: backups and getting back
 
@@ -144,6 +159,9 @@ the app backs up `~/.config/hypr` again.
   local gamingApps = "^(" .. table.concat(dashboard.gaming_apps, "|") .. ")$"
   hl.window_rule({ match = { class = gamingApps }, workspace = "10" })
   ```
+
+**Open workspaces** (Set label now, Change number now) only send a command to the
+running Hyprland; no file changes.
 
 Colours set by a theme tool (Noctalia's `noctalia.lua`) are shown read-only.
 Options set somewhere the app can't follow (a file it doesn't see, or

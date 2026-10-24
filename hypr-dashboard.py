@@ -30,8 +30,9 @@ import luasrc  # noqa: E402
 import options  # noqa: E402
 import review  # noqa: E402
 import rules  # noqa: E402
+import workspaces  # noqa: E402
 from items_page import ItemsPages  # noqa: E402
-from lists_page import ListsPages  # noqa: E402
+from lists_page import ListsPages, workspace_editor  # noqa: E402
 from options_page import OptionsPage  # noqa: E402
 from search import ResultsPage, SearchablePage, load_css, matches, scroll_and_flash  # noqa: E402
 
@@ -54,7 +55,8 @@ class Dashboard(Adw.ApplicationWindow):
 		self.rules_hooked, gaming_hooked = rules.hooks()
 		self.clients = []
 		self.monitors = []
-		self.workspaces = []
+		self.workspaces = []  # workspace strings for menus: "999", "name:web"
+		self.workspace_names = {}  # {"999": "gaming"}
 		self.page_groups = {}
 		self.refresh_hyprland()
 
@@ -238,9 +240,8 @@ class Dashboard(Adw.ApplicationWindow):
 		try:
 			self.clients = hypr.hyprctl_json("clients")
 			self.monitors = hypr.hyprctl_json("monitors")
-			ids = {str(w["id"]) for w in hypr.hyprctl_json("workspaces") if w["id"] > 0}
-			ids |= {r["workspaceString"] for r in hypr.hyprctl_json("workspacerules")}
-			self.workspaces = sorted(ids, key=lambda w: (not w.isdigit(), int(w) if w.isdigit() else 0, w))
+			self.workspaces = workspaces.known()
+			self.workspace_names = workspaces.live_names()
 		except Exception as e:  # noqa: BLE001 - keep the app usable without Hyprland
 			print("hyprctl failed:", e, file=sys.stderr)
 
@@ -274,6 +275,8 @@ class Dashboard(Adw.ApplicationWindow):
 		if self.items.pending or self.lists.pending:
 			# Pending edits point into the files as they were read; keep that view.
 			self.toasts.add_toast(Adw.Toast(title="Only option values re-read: apply your other changes first"))
+			if self.lists.lists:
+				self.lists.rebuild()  # same files, but fresh open workspaces and names
 		else:
 			self.load_items()
 		self.rebuild()
@@ -303,7 +306,7 @@ class Dashboard(Adw.ApplicationWindow):
 		apps = self.state["gaming_apps"]
 		group = Adw.PreferencesGroup(
 			title="Gaming apps",
-			description="Windows whose class matches one of these go to the gaming workspace "
+			description=f"Windows whose class matches one of these go to the gaming workspace{self.gaming_workspace()} "
 			"and render opaque without blur. Each entry is a regex.")
 		pick = Gtk.Button(label="Add from open window…", valign=Gtk.Align.CENTER)
 		pick.connect("clicked", lambda _b: self.pick_window(lambda c: self.add_gaming_app(c["class"])))
@@ -374,11 +377,21 @@ class Dashboard(Adw.ApplicationWindow):
 		page.add(group)
 		return groups + [group]
 
+	def gaming_workspace(self):
+		"""' (ID 999 · named “gaming”)' from the window rule that sends gaming apps somewhere, else ''."""
+		lists = self.lists.lists
+		for call in lists.window_rules if lists else []:
+			site, _v = lists.field(call, (0, "match", "class"))
+			_s, ws = lists.field(call, (0, "workspace"))
+			if site is not None and ws.kind and lists.gaming_name(call, site.text.strip()):
+				return f" ({workspaces.describe(ws.value, self.workspace_names)})"
+		return ""
+
 	def rule_summary(self, rule):
 		what = rule["name"] or next((v for v in rule["match"].values() if v), "New rule")
 		actions = []
 		if rule["workspace"]:
-			actions.append(f"workspace {rule['workspace']}")
+			actions.append(workspaces.describe(rule["workspace"], self.workspace_names))
 		if rule["monitor"]:
 			actions.append(self.monitor_label(rule["monitor"]))
 		actions += [label.split(" (")[0].lower() for flag, label in rules.FLAGS if flag in rule["flags"]]
@@ -427,8 +440,9 @@ class Dashboard(Adw.ApplicationWindow):
 			entry.connect("changed", on_text)
 			row.add_row(entry)
 
-		workspace = self.combo("Move to workspace", [NONE] + self.workspaces, rule["workspace"] or NONE,
-			lambda value: (rule.__setitem__("workspace", "" if value == NONE else value), changed()))
+		workspace = Adw.ActionRow(title="Move to workspace number", subtitle="Leave empty to keep the window where it opens")
+		workspace.add_suffix(workspace_editor(rule["workspace"], lambda value: (rule.__setitem__("workspace", value),
+			changed()), self.workspaces, self.workspace_names, allow_none=True))
 		row.add_row(workspace)
 
 		monitor_values = [NONE] + [f"desc:{m['description']}" for m in self.monitors]
