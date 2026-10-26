@@ -33,35 +33,29 @@ them (comments, layout, order) exactly as it was.
 
 ## Install
 
-Needs git.
-
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Soulmanyes/hypr-dashboard/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Soulmanyes/hypr-dashboard/main/install.sh | sh
 ```
 
-This clones the app to `~/hypr-dashboard` and adds "Hyprland Dashboard" to your
-launcher. Or do the same by hand:
+This downloads the latest release, copies the app to
+`~/.local/share/hypr-dashboard` and adds "Hyprland Dashboard" to your launcher.
+From a clone, `./install.sh` does the same with the code in the clone. Start the
+app from inside a Hyprland session.
 
-```sh
-git clone https://github.com/Soulmanyes/hypr-dashboard ~/hypr-dashboard
-~/hypr-dashboard/install.sh                # adds "Hyprland Dashboard" to your launcher
-```
-
-The app runs from that folder, so keep it there (or run `install.sh` again
-after moving it). Start it from inside a Hyprland session.
+Installed with a version before 1.1.0? That one ran from a git clone (usually
+`~/hypr-dashboard`). Run the command above once. It copies the clone's
+`backups/` to `~/.local/state/hypr-dashboard/backups` and points the launcher
+at the new copy. After that you can delete the clone.
 
 ## Update
 
-Run the install command again:
+When a new version is out, a bar under the title says so; press **Update**, then
+**Restart**. The menu button (☰) shows the version, has **Check now**, and an
+**Install updates automatically** switch (off by default). The app asks GitHub
+about once a day. On the first launch after an update, it backs up
+`~/.config/hypr` again.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Soulmanyes/hypr-dashboard/main/install.sh | bash
-```
-
-It finds the app folder from the launcher entry `install.sh` made, so it
-works from any folder and wherever you cloned the app, and runs `git pull`
-there. Then close and reopen the app. On the first launch after an update,
-the app backs up `~/.config/hypr` again.
+Running the install command again also updates the app.
 
 ## While you edit
 
@@ -109,7 +103,7 @@ the app backs up `~/.config/hypr` again.
 ## Before you start: backups and getting back
 
 - **On first launch**, and on the first launch after you update the app, it
-  copies your whole `~/.config/hypr` into `backups/` inside the app folder. If
+  copies your whole `~/.config/hypr` into `~/.local/state/hypr-dashboard/backups`. If
   that copy fails, Apply stays off.
 - **Before anything is written**, Apply lists every pending change in plain
   words ("blur enabled: off → on", "Startup command …: remove"), then every
@@ -125,8 +119,8 @@ the app backs up `~/.config/hypr` again.
   in and run:
 
   ```sh
-  ~/hypr-dashboard/restore.sh               # pick a backup from a list
-  ~/hypr-dashboard/restore.sh --last-apply  # or only undo the last Apply
+  ~/.local/share/hypr-dashboard/restore.sh               # pick a backup from a list
+  ~/.local/share/hypr-dashboard/restore.sh --last-apply  # or only undo the last Apply
   ```
 
   It asks before changing anything and first saves your current config as
@@ -169,7 +163,8 @@ Options set somewhere the app can't follow (a file it doesn't see, or
 
 ## Uninstall
 
-1. `~/hypr-dashboard/install.sh --uninstall` removes the launcher.
+1. `~/.local/share/hypr-dashboard/install.sh --uninstall` removes the app and
+   the launcher. The backups stay in `~/.local/state/hypr-dashboard/backups`.
 2. If you want your config back to how it was without the app's extras, remove
    from `hyprland.lua` the `require("config.dashboard_options")` line and, if
    you pressed Connect, the three lines under
@@ -177,7 +172,8 @@ Options set somewhere the app can't follow (a file it doesn't see, or
    `config/dashboard_options.lua`, `config/dashboard.lua` and
    `config/dashboard.json`. Or restore the first-launch backup with
    `restore.sh`.
-3. Delete the app folder.
+3. Delete `~/.local/state/hypr-dashboard` (the backups) and
+   `~/.config/hypr-dashboard` (update settings) once you no longer need them.
 
 ## License
 

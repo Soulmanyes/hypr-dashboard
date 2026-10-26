@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import threading
 
 import gi
 
@@ -30,6 +31,7 @@ import luasrc  # noqa: E402
 import options  # noqa: E402
 import review  # noqa: E402
 import rules  # noqa: E402
+import updater  # noqa: E402
 import workspaces  # noqa: E402
 from items_page import ItemsPages  # noqa: E402
 from lists_page import ListsPages, workspace_editor  # noqa: E402
@@ -38,7 +40,10 @@ from search import ResultsPage, SearchablePage, load_css, matches, scroll_and_fl
 
 NONE = "(none)"
 APP_ID = "dev.hyprdashboard.HyprDashboard"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+REPO = "Soulmanyes/hypr-dashboard"
+UPDATE_STATE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+	"hypr-dashboard", "updates.json")
 TESTED_HYPRLAND = "0.56"
 
 
@@ -118,9 +123,13 @@ class Dashboard(Adw.ApplicationWindow):
 		refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh open windows and option values")
 		refresh.connect("clicked", self.on_refresh)
 		header.pack_start(refresh)
+		header.pack_end(self.update_menu())
+		self.update_banner = Adw.Banner(button_label="Update")
+		self.update_banner.connect("button-clicked", lambda *_: self.install_update())
 
 		view = Adw.ToolbarView(content=body)
 		view.add_top_bar(header)
+		view.add_top_bar(self.update_banner)
 		self.toasts.set_child(view)
 		self.set_content(self.toasts)
 		self.load_options()
@@ -129,6 +138,7 @@ class Dashboard(Adw.ApplicationWindow):
 		nav.select_row(nav.get_row_at_index(0))
 		self.make_backup()
 		self.check_version()
+		self.check_update()
 		# The gaming list only does something with a hand-written gaming rule that reads it.
 		if not gaming_hooked and not self.state["gaming_apps"]:
 			nav.get_row_at_index(self.page_names.index("gaming")).set_visible(False)
@@ -175,9 +185,121 @@ class Dashboard(Adw.ApplicationWindow):
 			self.toasts.add_toast(Adw.Toast(title=f"Couldn't back up your config, so Apply is off: {e}", timeout=0))
 			return
 		if path:
-			name = os.path.relpath(path, backup.APP_DIR)
+			name = path.replace(os.path.expanduser("~"), "~", 1)
 			self.toasts.add_toast(Adw.Toast(title=f"Config backed up to {name}. restore.sh puts it back, even from a TTY.",
 				timeout=12))
+
+	# Updates -------------------------------------------------------------
+
+	def update_menu(self):
+		"""The header's menu button: version, Check now and the auto-install switch."""
+		self.updates = updater.Updater(REPO, VERSION, os.path.dirname(os.path.realpath(__file__)), UPDATE_STATE)
+		self.latest = None  # a newer release, once the check finds one
+		self.installing = False
+		self.installed = False  # installed, by this window or an earlier one; a restart starts it
+		group = Adw.PreferencesGroup(title="Updates", width_request=380)
+		self.update_row = Adw.ActionRow(title=f"Hyprland Dashboard {VERSION}")
+		self.check_button = Gtk.Button(label="Check now", valign=Gtk.Align.CENTER)
+		self.check_button.connect("clicked", lambda *_: self.check_update(force=True))
+		self.update_row.add_suffix(self.check_button)
+		self.restart_button = Gtk.Button(label="Restart", valign=Gtk.Align.CENTER, visible=False,
+			css_classes=["suggested-action"])
+		self.restart_button.connect("clicked", lambda *_: self.restart())
+		self.update_row.add_suffix(self.restart_button)
+		group.add(self.update_row)
+		auto = Adw.SwitchRow(title="Install updates automatically",
+			subtitle="Off: the app tells you about a new version and waits for you to press Update. "
+			"Checks GitHub once a day", active=self.updates.auto)
+		auto.connect("notify::active", self.toggle_auto_update)
+		group.add(auto)
+		box = Gtk.Box(margin_start=6, margin_end=6, margin_top=6, margin_bottom=6)
+		box.append(group)
+		return Gtk.MenuButton(icon_name="open-menu-symbolic", tooltip_text="Version and updates",
+			popover=Gtk.Popover(child=box))
+
+	def toggle_auto_update(self, row, _):
+		self.updates.auto = row.get_active()
+		if self.updates.auto and self.latest and not self.updates.failed(self.latest):
+			self.install_update()
+
+	def show_installed(self, tag):
+		self.installed = True
+		self.update_banner.set_revealed(False)
+		self.update_row.set_subtitle(f"{tag} installed. Restart to use it")
+		self.check_button.set_visible(False)
+		self.restart_button.set_visible(True)
+
+	def check_update(self, force=False):
+		if self.installing or self.installed:
+			return
+		self.update_row.set_subtitle("Checking…")
+
+		def work():
+			try:
+				latest, error = self.updates.check(force), None
+			except (OSError, ValueError, KeyError) as e:  # offline, GitHub down, odd reply
+				latest, error = None, e
+			GLib.idle_add(found, latest, error)
+
+		def found(latest, error):
+			self.latest = latest
+			if error:
+				# only a check you asked for complains; the daily one stays quiet offline
+				self.update_row.set_subtitle("Couldn't reach GitHub" if force else "")
+			elif not latest:
+				self.update_row.set_subtitle("Up to date")
+			elif self.updates.installed(latest):
+				self.show_installed(latest["tag"])
+			else:
+				self.update_row.set_subtitle(f"{latest['tag']} is available")
+				if self.updates.auto and not self.updates.dev_checkout and not self.updates.failed(latest):
+					self.install_update()
+				else:
+					self.update_banner.set_title(f"Hyprland Dashboard {latest['tag']} is available")
+					self.update_banner.set_revealed(True)
+			return False
+
+		threading.Thread(target=work, daemon=True).start()
+
+	def install_update(self):
+		if self.installing or self.installed or not self.latest:
+			return
+		if self.updates.dev_checkout:
+			self.toasts.add_toast(Adw.Toast(title="Running from a git checkout: update it with git pull", timeout=5))
+			return
+		latest = self.latest
+		self.installing = True
+		self.update_banner.set_revealed(False)
+		self.update_row.set_subtitle(f"Installing {latest['tag']}…")
+
+		def work():
+			try:
+				self.updates.install(latest)
+				error = None
+			except (OSError, RuntimeError) as e:  # network, disk, installer: shown to the user
+				error = str(e)
+			GLib.idle_add(finished, error)
+
+		def finished(error):
+			self.installing = False
+			if error:
+				self.update_row.set_subtitle(f"Couldn't update: {error}")
+				self.toasts.add_toast(Adw.Toast(title=f"Couldn't update: {error}", timeout=6))
+				return False
+			self.show_installed(latest["tag"])
+			toast = Adw.Toast(title=f"Updated to {latest['tag']}. Restart to use it", button_label="Restart", timeout=0)
+			toast.connect("button-clicked", lambda *_: self.restart())
+			self.toasts.add_toast(toast)
+			return False
+
+		threading.Thread(target=work, daemon=True).start()
+
+	def restart(self):
+		if self.apply_button.get_sensitive():
+			self.toasts.add_toast(Adw.Toast(title="Apply your changes before restarting", timeout=3))
+			return
+		app = os.path.realpath(__file__)
+		os.execv(sys.executable, [sys.executable, app])
 
 	# Search --------------------------------------------------------------
 
@@ -749,7 +871,7 @@ def startup_problem():
 	"""(title, text) when the app can't work here, else None."""
 	if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
 		return ("Hyprland isn't running", "Start this app from inside a Hyprland session. "
-			f"To put back a config backup from a TTY, run {backup.APP_DIR}/restore.sh")
+			f"To put back a config backup from a TTY, run {os.path.join(backup.APP_DIR, 'restore.sh')}")
 	if not os.path.exists(luasrc.ENTRY):
 		conf = os.path.join(luasrc.HYPR_DIR, "hyprland.conf")
 		extra = " Your config is hyprland.conf (the older format), which this app can't edit." if os.path.exists(conf) else ""

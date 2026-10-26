@@ -1,4 +1,4 @@
-"""A full copy of ~/.config/hypr in the app's own folder, made on the first
+"""A full copy of ~/.config/hypr in ~/.local/state/hypr-dashboard/backups, made on the first
 launch and on the first launch after the app's code changed.
 
 The per-Apply backups in ~/.config/hypr/backups only hold the files one Apply
@@ -13,7 +13,9 @@ import time
 import hypr
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-BACKUP_DIR = os.path.join(APP_DIR, "backups")
+# Outside the app folder, so installing an update never touches them. restore.sh reads the same path.
+STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "hypr-dashboard")
+BACKUP_DIR = os.path.join(STATE_DIR, "backups")
 MARKER = os.path.join(BACKUP_DIR, ".app-version")
 
 

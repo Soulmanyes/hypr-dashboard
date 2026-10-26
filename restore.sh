@@ -8,11 +8,11 @@
 #   restore.sh --last-apply   undo the files the last Apply changed
 #
 # Before anything is overwritten, the current config is copied to
-# backups/hypr-<time>-before-restore, so a restore can itself be undone.
+# ~/.local/state/hypr-dashboard/backups/hypr-<time>-before-restore, so a restore
+# can itself be undone.
 set -euo pipefail
 
-app_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-store="$app_dir/backups"
+store="${XDG_STATE_HOME:-$HOME/.local/state}/hypr-dashboard/backups"
 hypr="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
 
 die() { echo "restore.sh: $*" >&2; exit 1; }

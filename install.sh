@@ -1,49 +1,52 @@
-#!/usr/bin/env bash
-# Adds Hyprland Dashboard to your app launcher (and removes it with --uninstall).
-# The app runs from this folder, so keep it where it is or run this again after moving it.
-# Without cloning the repo first (clones to ~/hypr-dashboard, or updates the installed copy):
-#   curl -fsSL https://raw.githubusercontent.com/Soulmanyes/hypr-dashboard/main/install.sh | bash
+#!/bin/sh
+# Installs Hyprland Dashboard for the current user (and removes it with --uninstall):
+# copies the app to ~/.local/share/hypr-dashboard and adds it to your app launcher.
+# Config backups live in ~/.local/state/hypr-dashboard/backups, so reinstalling or
+# updating never touches them. Run this again after changing the code in a clone.
+# Without cloning the repo first (installs the latest release, or updates the installed copy):
+#   curl -fsSL https://raw.githubusercontent.com/Soulmanyes/hypr-dashboard/main/install.sh | sh
 # The whole script is one { } block, so a download cut off midway runs nothing.
 {
-set -euo pipefail
+set -eu
 
 app_id="dev.hyprdashboard.HyprDashboard"
-dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+src="$(cd "$(dirname "$0")" && pwd)"
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+dest="$data/hypr-dashboard"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/hypr-dashboard"
+apps="$data/applications"
 desktop="$apps/$app_id.desktop"
 
-# run through curl | bash: the repo isn't next to the script, so clone it (or update the
-# installed copy, whose backups/ folder must stay with it) and run its installer
-# (--uninstall only removes the launcher, so it needs no download)
-if [ ! -f "$dir/hypr-dashboard.py" ] && [ "${1:-}" != "--uninstall" ]; then
-	command -v git >/dev/null || { echo "Install git first." >&2; exit 1; }
-	dir=""
-	if [ -f "$desktop" ]; then
-		dir="$(sed -n 's|^Exec=python3 "\(.*\)/hypr-dashboard.py"$|\1|p' "$desktop")"
-	fi
-	dir="${dir:-$HOME/hypr-dashboard}"
-	if [ -d "$dir/.git" ]; then
-		echo "Updating $dir"
-		git -C "$dir" pull --ff-only
-	elif [ -e "$dir" ]; then
-		echo "$dir exists but isn't a clone of hypr-dashboard. Move it away and run this again." >&2
-		exit 1
-	else
-		git clone https://github.com/Soulmanyes/hypr-dashboard "$dir"
-	fi
-	exec bash "$dir/install.sh" "$@" < /dev/tty
+# run through curl | sh: the app isn't next to the script, so download the latest
+# release (main if there is none yet) and run its installer
+if [ ! -f "$src/hypr-dashboard.py" ] && [ "${1:-}" != "--uninstall" ]; then
+	command -v curl >/dev/null || { echo "Install curl first." >&2; exit 1; }
+	tmp="$(mktemp -d)"
+	trap 'rm -rf "$tmp"' EXIT
+	echo "Downloading Hyprland Dashboard"
+	# releases/latest redirects to .../tag/<tag>
+	tag="$(curl -fsSLo /dev/null -w '%{url_effective}' \
+		https://github.com/Soulmanyes/hypr-dashboard/releases/latest | sed -n 's|.*/tag/||p')"
+	ref="${tag:+tags/$tag}"
+	curl -fsSL "https://github.com/Soulmanyes/hypr-dashboard/archive/refs/${ref:-heads/main}.tar.gz" |
+		tar -xz -C "$tmp" --strip-components=1
+	sh "$tmp/install.sh" "$@" < /dev/null
+	exit
 fi
 
 if [ "${1:-}" = "--uninstall" ]; then
-	rm -f "$desktop"
-	echo "Removed $desktop"
-	echo "Your Hyprland config is unchanged. See README.md for removing the lines the app added."
+	rm -rf "$dest" "$desktop"
+	echo "Removed $dest and $desktop"
+	echo "Your Hyprland config is unchanged, and its backups stay in $state/backups."
+	echo "See README.md for removing the lines the app added."
 	exit 0
 fi
 
-missing=()
-command -v python3 >/dev/null || missing+=("python3")
-python3 - <<'PY' 2>/dev/null || missing+=("PyGObject with GTK 4.12+ and libadwaita 1.6+")
+missing=""
+command -v python3 >/dev/null || missing="$missing  python3
+"
+python3 - <<'PY' 2>/dev/null || missing="$missing  PyGObject with GTK 4.12+ and libadwaita 1.6+
+"
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
@@ -51,12 +54,43 @@ from gi.repository import Adw, Gtk
 assert (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 12)
 assert (Adw.get_major_version(), Adw.get_minor_version()) >= (1, 6)
 PY
-command -v hyprctl >/dev/null || missing+=("hyprctl (Hyprland)")
-if [ "${#missing[@]}" -gt 0 ]; then
-	printf 'Missing: %s\n' "${missing[@]}" >&2
+command -v hyprctl >/dev/null || missing="$missing  hyprctl (Hyprland)
+"
+if [ -n "$missing" ]; then
+	printf 'Missing:\n%s' "$missing" >&2
 	echo "On Arch: sudo pacman -S python-gobject gtk4 libadwaita" >&2
 	exit 1
 fi
+
+# Before 1.1.0 the app ran from a git clone (by default ~/hypr-dashboard) and kept its
+# backups in a backups/ folder there. Copy them over; the clone itself stays as it is.
+old=""
+if [ -f "$desktop" ]; then
+	old="$(sed -n 's|^Exec=python3 "\(.*\)/hypr-dashboard.py"$|\1|p' "$desktop")"
+fi
+if [ -n "$old" ] && [ "$old" != "$dest" ] && [ -d "$old/backups" ]; then
+	mkdir -p "$state/backups"
+	copied=0
+	for b in "$old"/backups/hypr-* "$old/backups/.app-version"; do
+		[ -e "$b" ] || continue
+		[ -e "$state/backups/$(basename "$b")" ] && continue
+		cp -a "$b" "$state/backups/"
+		copied=$((copied + 1))
+	done
+	echo "Copied $copied config backups from $old/backups to $state/backups"
+	if [ "$old" != "$src" ]; then
+		echo "The app no longer runs from $old. Once you've checked the backups, you can delete that folder."
+	fi
+fi
+
+if [ "$src" != "$dest" ]; then
+	echo "Installing the app to $dest"
+	mkdir -p "$dest"
+	# old .py files would change the code fingerprint backup.py takes
+	rm -rf "$dest"/*.py "$dest/__pycache__"
+	cp "$src"/*.py "$src/install.sh" "$src/restore.sh" "$src/LICENSE" "$dest/"
+fi
+chmod +x "$dest/hypr-dashboard.py" "$dest/restore.sh" "$dest/install.sh"
 
 mkdir -p "$apps"
 cat > "$desktop" <<DESKTOP
@@ -64,12 +98,11 @@ cat > "$desktop" <<DESKTOP
 Type=Application
 Name=Hyprland Dashboard
 Comment=Edit Hyprland options, monitors, keybinds, rules, animations and startup
-Exec=python3 "$dir/hypr-dashboard.py"
+Exec=python3 "$dest/hypr-dashboard.py"
 Icon=preferences-desktop
 Categories=Settings;
 StartupWMClass=$app_id
 DESKTOP
-chmod +x "$dir/hypr-dashboard.py" "$dir/restore.sh"
 echo "Installed: $desktop"
-echo "Open \"Hyprland Dashboard\" from your launcher. Keep $dir/restore.sh in mind (see README.md)."
+echo "Open \"Hyprland Dashboard\" from your launcher. Keep $dest/restore.sh in mind (see README.md)."
 }
