@@ -40,7 +40,7 @@ from search import ResultsPage, SearchablePage, load_css, matches, scroll_and_fl
 
 NONE = "(none)"
 APP_ID = "dev.hyprdashboard.HyprDashboard"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 REPO = "Soulmanyes/hypr-dashboard"
 UPDATE_STATE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
 	"hypr-dashboard", "updates.json")

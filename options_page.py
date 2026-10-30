@@ -9,10 +9,10 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, GLib, Gtk
 
-import hypr  # noqa: E402
-import options  # noqa: E402
+import hypr
+import options
 
 INT_RANGE = (-(2 ** 31), 2 ** 31 - 1)
 FLOAT_RANGE = (-1e6, 1e6)
@@ -45,7 +45,7 @@ def pretty(name):
 
 
 def shown_value(option):
-	if option.type == "css":
+	if option.type == "css" or isinstance(option.value, (list, tuple)):
 		return " ".join(str(v) for v in option.value)
 	if option.type == "bool":
 		return "on" if option.value else "off"
@@ -274,11 +274,11 @@ class OptionsPage(Gtk.Box):
 			# "(not set)" isn't a word to write: picking it removes the setting instead.
 			row.connect("notify::selected", lambda r, _p: changed(options.RESET
 				if values[r.get_selected()] in MARKERS and values[r.get_selected()] != option.value else values[r.get_selected()]))
-			show = lambda v: row.set_selected(values.index(v)) if v in values else None  # noqa: E731
+			show = lambda v: row.set_selected(values.index(v)) if v in values else None
 		elif option.type == "bool":
 			row = Adw.SwitchRow(title=title, subtitle=subtitle, active=bool(value))
 			row.connect("notify::active", lambda r, _p: changed(r.get_active()))
-			show = lambda v: row.set_active(bool(v))  # noqa: E731
+			show = lambda v: row.set_active(bool(v))
 		elif option.choices:
 			labels = [label for label, _ in option.choices]
 			values = [v for _, v in option.choices]
@@ -289,7 +289,7 @@ class OptionsPage(Gtk.Box):
 			row = Adw.ComboRow(title=title, subtitle=subtitle, model=Gtk.StringList.new(labels),
 				selected=values.index(value))
 			row.connect("notify::selected", lambda r, _p: changed(values[r.get_selected()]))
-			show = lambda v: row.set_selected(values.index(v))  # noqa: E731
+			show = lambda v: row.set_selected(values.index(v))
 		elif option.type in ("int", "float"):
 			low, high = INT_RANGE if option.type == "int" else FLOAT_RANGE
 			# Widen the range to the live, shown and default values so set_value never clamps them.
